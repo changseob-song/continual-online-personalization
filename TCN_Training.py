@@ -23,10 +23,10 @@ sweep_config = {
 
 # Base hyperparameters
 hyperparam_config = {
-    'wandb_project_name': 'Biotorque_in_lab_initial',
+    'wandb_project_name': 'Biotorque_unilateral_initial',
     'wandb_session_name': 'test',
-    'input_size': 22, # 18 for IMU, 2 for hip encoders, 2 for hip velocities
-    'output_size': 2, # 2 for hip moments
+    'input_size': 14, # 12 for IMU (right and pelvis), 2 for hip angle and velocity
+    'output_size': 1, # 1 for right hip torque
     'architecture': 'TCN',
     
     'transfer_learning': False,
@@ -61,7 +61,7 @@ def train():
 
     # Create directory for results & plots
     save_dir = '/home/metamobility3/Changseob/biotorque/in-lab_version/training_result'
-    save_sub_dir = 'initial'  # 1. AB, 2. SK, 3. AB+SK
+    save_sub_dir = 'unilateral_initial'  # 1. AB, 2. SK, 3. AB+SK
     save_dir = os.path.join(save_dir, save_sub_dir)
     os.makedirs(save_dir, exist_ok=True)
 

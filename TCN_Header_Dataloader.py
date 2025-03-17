@@ -145,35 +145,89 @@ class LoadData(torch.utils.data.Dataset):
 
                 # Load and concatenate all input data files
 
-                input_buffer = None
+                input_buffer_R = None
+                input_buffer_L = None
+                R_side_first = np.random.randint(0, 2) # Randomly select right or left side as the first column
+
                 for i, name in enumerate(input_file_names):
                     csv_path = os.path.join(input_file_dir, name)
-                    input_df = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip').values[:, 1:] # Skip time column
-                    if input_buffer is None:    input_buffer = input_df
-                    else:   input_buffer = np.hstack((input_buffer, input_df))
+
+                    # Extract IMU data from input file
+                    if 'imu' in name.lower():
+                        # Right side
+                        input_df_R = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
+                            'Pelvis_Acc_X', 'Pelvis_Acc_Y', 'Pelvis_Acc_Z', 'Pelvis_Gyr_X', 'Pelvis_Gyr_Y', 'Pelvis_Gyr_Z',
+                            'Thigh_R_Acc_X', 'Thigh_R_Acc_Y', 'Thigh_R_Acc_Z', 'Thigh_R_Gyr_X', 'Thigh_R_Gyr_Y', 'Thigh_R_Gyr_Z'
+                            ]].values
+                        # Left side
+                        input_df_L = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
+                            'Pelvis_Acc_X', 'Pelvis_Acc_Y', 'Pelvis_Acc_Z', 'Pelvis_Gyr_X', 'Pelvis_Gyr_Y', 'Pelvis_Gyr_Z',
+                            'Thigh_L_Acc_X', 'Thigh_L_Acc_Y', 'Thigh_L_Acc_Z', 'Thigh_L_Gyr_X', 'Thigh_L_Gyr_Y', 'Thigh_L_Gyr_Z'
+                            ]].values
+                        # Flip the signs of Pelvis_Acc_Y, Pelvis_Gyr_X, Pelvis_Gyr_Z, Thigh_L_Acc_Y, Thigh_L_Gyr_X, Thigh_L_Gyr_Z
+                        input_df_L[:, [1, 3, 4, 7, 9, 11]] *= -1
+
+                    elif 'motor' in name.lower():
+                        # Right side
+                        input_df_R = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
+                            'mtr_pos_R', 'mtr_vel_R'
+                            ]].values
+                        # Left side
+                        input_df_L = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
+                            'mtr_pos_L', 'mtr_vel_L'
+                            ]].values
+                        # Flip the signs of mtr_pos_L, mtr_vel_L
+                        input_df_L[:, [0, 1]] *= -1
+
+                    if input_buffer_R is None:    input_buffer_R = input_df_R
+                    else:   input_buffer_R = np.hstack((input_buffer_R, input_df_R))
+                    if input_buffer_L is None:    input_buffer_L = input_df_L
+                    else:   input_buffer_L = np.hstack((input_buffer_L, input_df_L))
                     print(f"\tinput file {i+1} loaded: ", name)
+
                 
-                input_time_sec = int(input_buffer.shape[0]/100) # Extract recording time from input file by dividing 100 Hz
+                input_time_sec = int(input_buffer_R.shape[0]/100) # Extract recording time from input file by dividing 100 Hz
                 if self.data_type == "train_data":
-                    input_buffer = input_buffer[:int(input_buffer.shape[0]* self.dataset_proportion), :] # Use (dataset_proportion)% of the data for training
+                    input_buffer_R = input_buffer_R[:int(input_buffer_R.shape[0]* self.dataset_proportion), :] # Use (dataset_proportion)% of the data for training
+                    input_buffer_L = input_buffer_L[:int(input_buffer_L.shape[0]* self.dataset_proportion), :]
                 elif self.data_type == "train_data_tranfer_learning":
-                    input_buffer = input_buffer[:int(input_buffer.shape[0]* self.dataset_proportion), :]
+                    input_buffer_R = input_buffer_R[:int(input_buffer_R.shape[0]* self.dataset_proportion), :]
+                    input_buffer_L = input_buffer_L[:int(input_buffer_L.shape[0]* self.dataset_proportion), :]
                 elif self.data_type == "test_data":
-                    input_buffer = input_buffer[int(input_buffer.shape[0]* self.dataset_proportion):, :] # Use 10% of the data for testing
+                    input_buffer_R = input_buffer_R[int(input_buffer_R.shape[0]* self.dataset_proportion):, :] # Use 10% of the data for testing
+                    input_buffer_L = input_buffer_L[int(input_buffer_L.shape[0]* self.dataset_proportion):, :]
                 
+                # Randomly select right or left side as the first column
+                if R_side_first == 0:
+                    input_buffer = np.vstack((input_buffer_R, input_buffer_L))
+                else:
+                    input_buffer = np.vstack((input_buffer_L, input_buffer_R))
+
                 self.input_list.append(input_buffer)
                 
                 # Load and label data file (Vicon data)
                 label_buffer = self.load_vicon_hip_moment_data(label_file_dir, label_file_names[0], input_time_sec) # Extract recording time from input file by dividing 100 Hz
                 print(f"\tlabel file loaded: ", label_file_names)
 
+                label_buffer_R = label_buffer[:, 0].reshape(-1, 1)
+                label_buffer_L = label_buffer[:, 1].reshape(-1, 1)
+
                 if self.data_type == "train_data":
-                    label_buffer = label_buffer[:int(label_buffer.shape[0]* self.dataset_proportion), :] # Use (dataset_proportion)% of the data for training
+                    label_buffer_R = label_buffer_R[:int(label_buffer_R.shape[0]* self.dataset_proportion), :] # Use (dataset_proportion)% of the data for training
+                    label_buffer_L = label_buffer_L[:int(label_buffer_L.shape[0]* self.dataset_proportion), :]
                 elif self.data_type == "train_data_tranfer_learning":
-                    label_buffer = label_buffer[:int(label_buffer.shape[0]* self.dataset_proportion), :]
+                    label_buffer_R = label_buffer_R[:int(label_buffer_R.shape[0]* self.dataset_proportion), :]
+                    label_buffer_L = label_buffer_L[:int(label_buffer_L.shape[0]* self.dataset_proportion), :]
                 elif self.data_type == "test_data":
-                    label_buffer = label_buffer[int(label_buffer.shape[0]* self.dataset_proportion):, :] # Use 10% of the data for testing
-                    
+                    label_buffer_R = label_buffer_R[int(label_buffer_R.shape[0]* self.dataset_proportion):, :] # Use 10% of the data for testing
+                    label_buffer_L = label_buffer_L[int(label_buffer_L.shape[0]* self.dataset_proportion):, :]
+                
+                # Randomly select right or left side as the first column
+                if R_side_first == 0:
+                    label_buffer = np.vstack((label_buffer_R, label_buffer_L))
+                else:
+                    label_buffer = np.vstack((label_buffer_L, label_buffer_R))
+
                 self.label_list.append(label_buffer)
 
         # Concatenate all data
