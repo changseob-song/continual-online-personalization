@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import gc
 import csv
+import tensorrt as trt
 
 class Trainer:
     def __init__(self, device, model, wandb_run, criterion, optimizer, scheduler, data_handler, config, save_dir):
@@ -201,7 +202,50 @@ class Trainer:
             for i in range(label_true.shape[0]):
                 row = label_true[i].numpy().tolist() + label_pred[i].numpy().tolist()
                 writer.writerow(row)
-            
+    
+    def save_onnx_n_trt(self, model, trt_engine_path, hyperparam_config, fp16_mode=False):
+        # 1. Export to ONNX first
+        onnx_path = trt_engine_path.replace('.trt', '.onnx')
+        dummy_input = torch.randn(1, hyperparam_config['window_size'], 
+                                hyperparam_config['input_size']).cuda()
+        
+        torch.onnx.export(
+            model,
+            dummy_input,
+            onnx_path,
+            input_names=['input'],
+            output_names=['output'],
+            opset_version=11,
+        )
+        print(f">>> ONNX model saved to {onnx_path}")
+        
+        # 2. Convert ONNX to TensorRT using updated API
+        logger = trt.Logger(trt.Logger.WARNING)
+        builder = trt.Builder(logger)
+        network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+        parser = trt.OnnxParser(network, logger)
+        
+        # Parse the ONNX file
+        with open(onnx_path, 'rb') as model_file:
+            if not parser.parse(model_file.read()):
+                for error in range(parser.num_errors):
+                    print(f"ONNX parse error: {parser.get_error(error)}")
+                raise RuntimeError('Failed to parse ONNX model')
+
+        # Configure TensorRT builder
+        config = builder.create_builder_config()
+        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1GB workspace
+        
+        if fp16_mode:
+            config.set_flag(trt.BuilderFlag.FP16)
+        
+        # Use the updated API to build and serialize the engine
+        serialized_engine = builder.build_serialized_network(network, config)
+
+        with open(trt_engine_path, "wb") as f:
+            f.write(serialized_engine)
+        print(f">>> TensorRT engine saved at: {trt_engine_path}")
+
     def train(self):
         torch.cuda.empty_cache()
         gc.collect()
@@ -220,24 +264,12 @@ class Trainer:
             self.scheduler.step(val_loss)
             print("\tTrain Loss {:.04f}\tRMSE {:.04f}\tLearning Rate {:.7f}".format(
                 train_loss, train_rmse, curr_lr))
-            print("\tVal Loss {:.04f}\tRMSE {:.04f}".format(
+            print("\tVal Loss {:.04f}\t\tRMSE {:.04f}".format(
                 val_loss, val_rmse))
 
             # Save RMSE values for plotting
             self.train_rmse_list.append(train_rmse)
             self.val_rmse_list.append(val_rmse)
-
-            # Plot RMSE over epochs
-            # plt.figure()
-            # plt.plot(range(1, epoch+2), self.train_rmse_list, label='Training RMSE')
-            # plt.plot(range(1, epoch+2), self.val_rmse_list, label='Validation RMSE')
-            # plt.xlabel('Epoch')
-            # plt.ylabel('RMSE')
-            # plt.ylim(bottom=0)
-            # plt.title('Training and Validation RMSE over Epochs')
-            # plt.legend()
-            # plt.savefig(os.path.join(self.save_dir, f'rmse_epoch_hipknee.png'))
-            # plt.close()
 
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
@@ -260,24 +292,6 @@ class Trainer:
                 # self.plot_predictions(test_loader, num_samples=10000, epoch='best')
                 break
             
-            ############# ONNX file save ####################    
-            # onnx_model_path = os.path.join(self.save_dir, self.hyperparam_config['wandb_session_name'] + '.onnx')
-
-            # # Create a dummy input matching the input size of the model
-            # dummy_input = torch.randn(1, self.hyperparam_config['window_size'], self.hyperparam_config['input_size']).to(self.device)  
-
-            # torch.onnx.export(
-            #     self.model,
-            #     dummy_input,
-            #     onnx_model_path,
-            #     input_names=['input'],
-            #     output_names=['output'],
-            #     dynamic_axes={'input': {0: 'batch_size', 1: 'seq_length'}, 'output': {0: 'batch_size'}},
-            #     opset_version=11,
-            #     training=torch.onnx.TrainingMode.EVAL  # Ensure the model is in evaluation mode
-            # )
-            # print(f"Model exported to {onnx_model_path}")
-
             # Log metrics to wandb
             wandb.log({
                 'epoch': epoch + 1,
@@ -316,6 +330,10 @@ class Trainer:
         
         # Optionally, plot predictions using the best model
         self.plot_predictions(test_loader, num_samples=5000, epoch='final')
+
+        # Save the model as ONNX and TensorRT
+        trt_engine_path = os.path.join(self.save_dir, self.hyperparam_config['wandb_session_name'] + '.trt')
+        self.save_onnx_n_trt(self.model, trt_engine_path, self.hyperparam_config, fp16_mode=False)
         
         # Plot final RMSE over epochs
         plt.figure()

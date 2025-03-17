@@ -151,7 +151,7 @@ class LoadData(torch.utils.data.Dataset):
                     input_df = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip').values[:, 1:] # Skip time column
                     if input_buffer is None:    input_buffer = input_df
                     else:   input_buffer = np.hstack((input_buffer, input_df))
-                    print(f"input file {i+1} loaded: ", name)
+                    print(f"\tinput file {i+1} loaded: ", name)
                 
                 input_time_sec = int(input_buffer.shape[0]/100) # Extract recording time from input file by dividing 100 Hz
                 if self.data_type == "train_data":
@@ -165,7 +165,7 @@ class LoadData(torch.utils.data.Dataset):
                 
                 # Load and label data file (Vicon data)
                 label_buffer = self.load_vicon_hip_moment_data(label_file_dir, label_file_names[0], input_time_sec) # Extract recording time from input file by dividing 100 Hz
-                print(f"\nlabel file loaded: ", label_file_names)
+                print(f"\tlabel file loaded: ", label_file_names)
 
                 if self.data_type == "train_data":
                     label_buffer = label_buffer[:int(label_buffer.shape[0]* self.dataset_proportion), :] # Use (dataset_proportion)% of the data for training

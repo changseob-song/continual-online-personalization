@@ -1,0 +1,73 @@
+TCNModel(
+  (tcn): TemporalConvNet(
+    (network): Sequential(
+      (0): TemporalBlock(
+        (network): Sequential(
+          (0): ConstantPad1d(padding=(4, 0), value=0)
+          (1): Conv1d(22, 50, kernel_size=(5,), stride=(1,))
+          (2): ReLU()
+          (3): Dropout(p=0.15, inplace=False)
+          (4): ConstantPad1d(padding=(4, 0), value=0)
+          (5): Conv1d(50, 50, kernel_size=(5,), stride=(1,))
+          (6): ReLU()
+          (7): Dropout(p=0.15, inplace=False)
+        )
+        (downsample): Conv1d(22, 50, kernel_size=(1,), stride=(1,))
+        (relu): ReLU()
+      )
+      (1): TemporalBlock(
+        (network): Sequential(
+          (0): ConstantPad1d(padding=(8, 0), value=0)
+          (1): Conv1d(50, 50, kernel_size=(5,), stride=(1,), dilation=(2,))
+          (2): ReLU()
+          (3): Dropout(p=0.15, inplace=False)
+          (4): ConstantPad1d(padding=(8, 0), value=0)
+          (5): Conv1d(50, 50, kernel_size=(5,), stride=(1,), dilation=(2,))
+          (6): ReLU()
+          (7): Dropout(p=0.15, inplace=False)
+        )
+        (relu): ReLU()
+      )
+      (2): TemporalBlock(
+        (network): Sequential(
+          (0): ConstantPad1d(padding=(16, 0), value=0)
+          (1): Conv1d(50, 50, kernel_size=(5,), stride=(1,), dilation=(4,))
+          (2): ReLU()
+          (3): Dropout(p=0.15, inplace=False)
+          (4): ConstantPad1d(padding=(16, 0), value=0)
+          (5): Conv1d(50, 50, kernel_size=(5,), stride=(1,), dilation=(4,))
+          (6): ReLU()
+          (7): Dropout(p=0.15, inplace=False)
+        )
+        (relu): ReLU()
+      )
+      (3): TemporalBlock(
+        (network): Sequential(
+          (0): ConstantPad1d(padding=(32, 0), value=0)
+          (1): Conv1d(50, 50, kernel_size=(5,), stride=(1,), dilation=(8,))
+          (2): ReLU()
+          (3): Dropout(p=0.15, inplace=False)
+          (4): ConstantPad1d(padding=(32, 0), value=0)
+          (5): Conv1d(50, 50, kernel_size=(5,), stride=(1,), dilation=(8,))
+          (6): ReLU()
+          (7): Dropout(p=0.15, inplace=False)
+        )
+        (relu): ReLU()
+      )
+      (4): TemporalBlock(
+        (network): Sequential(
+          (0): ConstantPad1d(padding=(64, 0), value=0)
+          (1): Conv1d(50, 50, kernel_size=(5,), stride=(1,), dilation=(16,))
+          (2): ReLU()
+          (3): Dropout(p=0.15, inplace=False)
+          (4): ConstantPad1d(padding=(64, 0), value=0)
+          (5): Conv1d(50, 50, kernel_size=(5,), stride=(1,), dilation=(16,))
+          (6): ReLU()
+          (7): Dropout(p=0.15, inplace=False)
+        )
+        (relu): ReLU()
+      )
+    )
+  )
+  (linear): Linear(in_features=50, out_features=2, bias=True)
+)

@@ -1,7 +1,9 @@
 numpy
+scipy
 pandas
 matplotlib
 torchsummary
 torch
+tensorrt
 tqdm
 wandb
