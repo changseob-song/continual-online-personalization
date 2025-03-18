@@ -32,7 +32,7 @@ class TemporalBlock(nn.Module):
         out = self.network(x)
         res = x if self.downsample is None else self.downsample(x)
         # Ensure the shapes match for addition
-        out = out[:, :, -res.size(2):]  # Trim to match the residual size
+        out = out[:, :,  -res.size(2):]  # Trim to match the residual size
         return self.relu(out + res)
 
 class TemporalConvNet(nn.Module):
@@ -76,8 +76,7 @@ class TCNModel(nn.Module):
         # summary(self, input_size=(self.input_size, self.window_size))
 
     def forward(self, x):
-        # x shape: (batch_size, sequence_length, input_size)
-        x = x.transpose(1, 2)  # Convert to (batch_size, input_size, sequence_length)
+        # x shape: (batch_size, input_size, time window size = sequence length)
         y = self.tcn(x)
         y = y[:, :, -1]  # Take the last time step
         y = self.linear(y)

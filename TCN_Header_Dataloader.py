@@ -164,9 +164,10 @@ class LoadData(torch.utils.data.Dataset):
                             'Pelvis_Acc_X', 'Pelvis_Acc_Y', 'Pelvis_Acc_Z', 'Pelvis_Gyr_X', 'Pelvis_Gyr_Y', 'Pelvis_Gyr_Z',
                             'Thigh_L_Acc_X', 'Thigh_L_Acc_Y', 'Thigh_L_Acc_Z', 'Thigh_L_Gyr_X', 'Thigh_L_Gyr_Y', 'Thigh_L_Gyr_Z'
                             ]].values
-                        # Flip the signs of Pelvis_Acc_Y, Pelvis_Gyr_X, Pelvis_Gyr_Z, Thigh_L_Acc_Y, Thigh_L_Gyr_X, Thigh_L_Gyr_Z
+                        # Left side: Flip the signs of Pelvis_Acc_Y, Pelvis_Gyr_X, Pelvis_Gyr_Z, Thigh_L_Acc_Y, Thigh_L_Gyr_X, Thigh_L_Gyr_Z
                         input_df_L[:, [1, 3, 4, 7, 9, 11]] *= -1
 
+                    # Extract motor data from input file
                     elif 'motor' in name.lower():
                         # Right side
                         input_df_R = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
@@ -176,16 +177,17 @@ class LoadData(torch.utils.data.Dataset):
                         input_df_L = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
                             'mtr_pos_L', 'mtr_vel_L'
                             ]].values
-                        # Flip the signs of mtr_pos_L, mtr_vel_L
+                        # Left side: Flip the signs of mtr_pos_L, mtr_vel_L
                         input_df_L[:, [0, 1]] *= -1
 
+                    # Horizontally stack all input data
                     if input_buffer_R is None:    input_buffer_R = input_df_R
                     else:   input_buffer_R = np.hstack((input_buffer_R, input_df_R))
                     if input_buffer_L is None:    input_buffer_L = input_df_L
                     else:   input_buffer_L = np.hstack((input_buffer_L, input_df_L))
                     print(f"\tinput file {i+1} loaded: ", name)
 
-                
+                # Segment train data and test data based on dataset_proportion
                 input_time_sec = int(input_buffer_R.shape[0]/100) # Extract recording time from input file by dividing 100 Hz
                 if self.data_type == "train_data":
                     input_buffer_R = input_buffer_R[:int(input_buffer_R.shape[0]* self.dataset_proportion), :] # Use (dataset_proportion)% of the data for training
@@ -212,6 +214,7 @@ class LoadData(torch.utils.data.Dataset):
                 label_buffer_R = label_buffer[:, 0].reshape(-1, 1)
                 label_buffer_L = label_buffer[:, 1].reshape(-1, 1)
 
+                # Segment train data and test data based on dataset_proportion
                 if self.data_type == "train_data":
                     label_buffer_R = label_buffer_R[:int(label_buffer_R.shape[0]* self.dataset_proportion), :] # Use (dataset_proportion)% of the data for training
                     label_buffer_L = label_buffer_L[:int(label_buffer_L.shape[0]* self.dataset_proportion), :]
@@ -234,14 +237,11 @@ class LoadData(torch.utils.data.Dataset):
         self.input = np.concatenate(self.input_list, axis=0)
         self.label = np.concatenate(self.label_list, axis=0)
 
-        print('\ninput dataset size: ', np.shape(self.input))
-        print('label dataset size: ', np.shape(self.label))
-
-        print('\ninput dataset size after selecting columns: ', np.shape(self.input))
-        print('label dataset size after selecting columns: ', np.shape(self.label))
+        print(f'\ninput {self.data_type} dataset size: ', np.shape(self.input))
+        print(f'label {self.data_type} dataset size: ', np.shape(self.label))
 
         self.length = len(self.input) - self.window_size + 1
-        print("Total sequences: ", self.length)
+        print(f"Total {self.data_type} sequences: ", self.length)
 
         # Calculate mean and std using the entire dataset
         self.input_mean = np.mean(self.input, axis=0)
@@ -250,7 +250,7 @@ class LoadData(torch.utils.data.Dataset):
         self.label_mean = np.mean(self.label, axis=0)
         self.label_std = np.std(self.label, axis=0) + 1e-8
 
-        # Override with provided mean and std if given
+        # Override with provided mean and std if given (for transfer learning)
         if input_mean is not None:
             self.input_mean = input_mean
         if input_std is not None:
@@ -296,21 +296,23 @@ class LoadData(torch.utils.data.Dataset):
         return self.length
 
     def __getitem__(self, ind):
-        windows_input = self.input[ind: ind + self.window_size]
+        windows_input = self.input[ind: ind + self.window_size]     # Shape: (window_size, input_size)
         # Normalize the data using stored mean and std
         if self.normalize == True:
             windows_input = (windows_input - self.input_mean) / self.input_std
 
         # Convert to tensor without flattening
-        window_input = torch.FloatTensor(windows_input)  # Shape: (window_size, input_size)
+        window_input = torch.FloatTensor(windows_input).T           # Shape: (input_size, window_size)
+        # print(f"window_input shape: {window_input.shape}")
 
         # Get the target joint angles at the last time point in the window
-        target_label = self.label[ind + self.window_size - 1]
+        target_label = self.label[ind + self.window_size - 1]       # Shape: (output_size)
         
         # Normalize the target joint angles
         if self.normalize == True:
             target_label = (target_label - self.label_mean) / self.label_std
             
-        window_label = torch.FloatTensor(target_label)  # Shape: (output_size, output_size)
+        window_label = torch.FloatTensor(target_label) # Shape: (output_size), consider putting .T when output_size > 1
+        # print(f"window_label shape: {window_label.shape}")
         
         return window_input, window_label

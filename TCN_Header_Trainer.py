@@ -332,8 +332,8 @@ class Trainer:
         self.plot_predictions(test_loader, num_samples=5000, epoch='final')
 
         # Save the model as ONNX and TensorRT
-        trt_engine_path = os.path.join(self.save_dir, self.hyperparam_config['wandb_session_name'] + '.trt')
-        self.save_onnx_n_trt(self.model, trt_engine_path, self.hyperparam_config, fp16_mode=False)
+        # trt_engine_path = os.path.join(self.save_dir, self.hyperparam_config['wandb_session_name'] + '.trt')
+        # self.save_onnx_n_trt(self.model, trt_engine_path, self.hyperparam_config, fp16_mode=False)
         
         # Plot final RMSE over epochs
         plt.figure()
