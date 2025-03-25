@@ -23,14 +23,14 @@ sweep_config = {
 
 # Base hyperparameters
 hyperparam_config = {
-    'wandb_project_name': 'Biotorque_unilateral_initial',
+    'wandb_project_name': 'Biotorque_unilateral_five_subjects',
     'wandb_session_name': 'test',
     'input_size': 14, # 12 for IMU (right and pelvis), 2 for hip angle and velocity
     'output_size': 1, # 1 for right hip torque
     'architecture': 'TCN',
     
     'transfer_learning': False,
-    'dataset_proportion': 0.9, # dataset proportion for training
+    'dataset_proportion': 1, # dataset proportion for training
     
     'epochs': 50,
     'batch_size': 32,
@@ -61,7 +61,7 @@ def train():
 
     # Create directory for results & plots
     save_dir = '/home/metamobility3/Changseob/biotorque/in-lab_version/training_result'
-    save_sub_dir = 'unilateral_initial'  # 1. AB, 2. SK, 3. AB+SK
+    save_sub_dir = 'unilateral_five_subjects'  # 1. AB, 2. SK, 3. AB+SK
     save_dir = os.path.join(save_dir, save_sub_dir)
     os.makedirs(save_dir, exist_ok=True)
 
@@ -80,18 +80,18 @@ def train():
         pretrained_model_path = None
 
     # Initialize DataHandler
-    data_root = '/home/metamobility3/Changseob/biotorque/in-lab_version/250304_biotorque_initial_data'
+    data_root = '/home/metamobility3/Changseob/biotorque/in-lab_version/250319_biotorque_five_subjects'
     data_handler = DataHandler(data_root, hyperparam_config, pretrained_model_path)
     data_handler.load_data(
         train_data_partition= [
-                        'Jimin_0p0_mps', 'Jimin_0p6_mps', 'Jimin_0p8_mps',
-                        'Jimin_1p0_mps', 'Jimin_1p2_mps', 'Jimin_1p4_mps',
-                        'Jimin_transient_15sec', 'Jimin_transient_30sec',
+                        'AB01_Jimin',
+                        'AB02_Rajiv',
+                        'AB03_Amy',
+                        'AB04_Changseob',
+                        'AB05_Maria',
                         ],
         test_data_partition= [
-                        'Jimin_0p0_mps', 'Jimin_0p6_mps', 'Jimin_0p8_mps',
-                        'Jimin_1p0_mps', 'Jimin_1p2_mps', 'Jimin_1p4_mps',
-                        'Jimin_transient_15sec', 'Jimin_transient_30sec',
+                        'AB01_Jimin'
                         ]
     )
     data_handler.save_mean_std(save_dir)
