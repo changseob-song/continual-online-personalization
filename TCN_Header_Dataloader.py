@@ -86,11 +86,11 @@ class DataHandler:
 
         # Leave one subject out
         leave_out_start = sum(self.train_data.subject_data_length[:leave_one_subject_out])
-        leave_out_end = sum(self.train_data.subject_data_length[:leave_one_subject_out+1]) - self.window_size + 1
-        total_length = sum(self.train_data.subject_data_length) - self.window_size + 1
+        leave_out_end = sum(self.train_data.subject_data_length[:leave_one_subject_out+1]) - self.window_size + 1 # Subtract window size to avoid out of index error
+        total_length = sum(self.train_data.subject_data_length) - self.window_size + 1 # Subtract window size to avoid out of index error
         train_indices = list(range(0, leave_out_start)) + list(range(leave_out_end, total_length))
         val_indices = list(range(leave_out_start, leave_out_end))
-        print(f"Train data length: {len(train_indices)}, Validation data length: {len(val_indices)}")
+        # print(f"Train data length: {len(train_indices)}, Validation data length: {len(val_indices)}")
 
         return train_indices, val_indices
     
@@ -174,7 +174,7 @@ class LoadData(torch.utils.data.Dataset):
                                 'Thigh_L_Acc_X', 'Thigh_L_Acc_Y', 'Thigh_L_Acc_Z', 'Thigh_L_Gyr_X', 'Thigh_L_Gyr_Y', 'Thigh_L_Gyr_Z'
                                 ]].values
                             # Left side: Flip the signs of Pelvis_Acc_Y, Pelvis_Gyr_X, Pelvis_Gyr_Z, Thigh_L_Acc_Y, Thigh_L_Gyr_X, Thigh_L_Gyr_Z
-                            input_df_L[:, [1, 3, 4, 7, 9, 11]] *= -1
+                            input_df_L[:, [1, 3, 5, 7, 9, 11]] *= -1
 
                         # Extract motor data from input file
                         elif 'motor' in name.lower():
@@ -317,10 +317,10 @@ class LoadData(torch.utils.data.Dataset):
         window_input = torch.FloatTensor(windows_input).T           # Shape: (input_size, window_size)
         # print(f"window_input shape: {window_input.shape}")
 
-        # Get the target joint angles at the last time point in the window
+        # Get the target joint moments at the last time point in the window
         target_label = self.label[ind + self.window_size - 1]       # Shape: (output_size)
         
-        # Normalize the target joint angles
+        # Normalize the target joint moments
         if self.normalize == True:
             target_label = (target_label - self.label_mean) / self.label_std
             
