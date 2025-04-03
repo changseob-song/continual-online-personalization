@@ -281,7 +281,7 @@ class Trainer:
 
             # Plot predictions after each epoch
             test_loader = self.data_handler.create_dataloaders(test_indices=1)
-            self.plot_predictions(test_loader, num_samples=5000, epoch=epoch+1)
+            # self.plot_predictions(test_loader, num_samples=5000, epoch=epoch+1)
 
             # Early Stopping
             if self.patience_counter >= self.patience:

@@ -23,8 +23,8 @@ sweep_config = {
 
 # Base hyperparameters
 hyperparam_config = {
-    'wandb_project_name': 'Biotorque_unilateral_five_subjects',
-    'wandb_session_name': 'test',
+    'wandb_project_name': 'Biotorque_initial',
+    'wandb_session_name': 'unilateral_five_subjects',
     'input_size': 14, # 12 for IMU (right and pelvis), 2 for hip angle and velocity
     'output_size': 1, # 1 for right hip torque
     'architecture': 'TCN',
@@ -32,7 +32,7 @@ hyperparam_config = {
     'transfer_learning': False,
     'dataset_proportion': 1, # dataset proportion for training
     
-    'epochs': 50,
+    'epochs': 30,
     'batch_size': 32,
     'init_lr': 5e-4,
     'dropout': 0.15,
@@ -61,7 +61,7 @@ def train():
 
     # Create directory for results & plots
     save_dir = '/home/metamobility3/Changseob/biotorque/in-lab_version/training_result'
-    save_sub_dir = 'unilateral_five_subjects'  # 1. AB, 2. SK, 3. AB+SK
+    save_sub_dir = hyperparam_config['wandb_session_name']  # 1. AB, 2. SK, 3. AB+SK
     save_dir = os.path.join(save_dir, save_sub_dir)
     os.makedirs(save_dir, exist_ok=True)
 
@@ -83,16 +83,20 @@ def train():
     data_root = '/home/metamobility3/Changseob/biotorque/in-lab_version/250319_biotorque_five_subjects'
     data_handler = DataHandler(data_root, hyperparam_config, pretrained_model_path)
     data_handler.load_data(
-        train_data_partition= [
+        train_data_partition=[
                         'AB01_Jimin',
                         'AB02_Rajiv',
                         'AB03_Amy',
                         'AB04_Changseob',
-                        'AB05_Maria',
-                        ],
-        test_data_partition= [
-                        'AB01_Jimin'
-                        ]
+                        'AB05_Maria'
+        ],
+        test_data_partition=[
+                        'AB01_Jimin',
+                        'AB02_Rajiv',
+                        'AB03_Amy',
+                        'AB04_Changseob',
+                        'AB05_Maria'
+        ],
     )
     data_handler.save_mean_std(save_dir)
 

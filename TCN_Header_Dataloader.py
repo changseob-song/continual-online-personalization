@@ -81,16 +81,27 @@ class DataHandler:
      
     def get_train_val_indices(self):
         # Randomly split indices for training and validation
-        leave_one_subject_out = np.random.randint(0, len(self.train_data.subject_data_length)) # Randomly select one subject to leave out
-        print(f"\nLeave out subject: {leave_one_subject_out+1}")
+        if len(self.train_data.subject_data_length) == 1:
+            # Special case: only one subject
+            total_length = self.train_data.subject_data_length[0] - self.window_size + 1
+            indices = list(range(total_length))
+            split_point = int(np.floor(total_length * (1 - self.validation_split)))
+            
+            # Shuffle indices before splitting
+            np.random.shuffle(indices)
+            train_indices = indices[:split_point]
+            val_indices = indices[split_point:]
+            print(f"\nSingle subject detected. Random split: {len(train_indices)} train, {len(val_indices)} validation samples")
+        else:
+            # Multiple subjects: leave one subject out
+            leave_one_subject_out = np.random.randint(0, len(self.train_data.subject_data_length))
+            print(f"\nLeave out subject: {leave_one_subject_out+1}")
 
-        # Leave one subject out
-        leave_out_start = sum(self.train_data.subject_data_length[:leave_one_subject_out])
-        leave_out_end = sum(self.train_data.subject_data_length[:leave_one_subject_out+1]) - self.window_size + 1 # Subtract window size to avoid out of index error
-        total_length = sum(self.train_data.subject_data_length) - self.window_size + 1 # Subtract window size to avoid out of index error
-        train_indices = list(range(0, leave_out_start)) + list(range(leave_out_end, total_length))
-        val_indices = list(range(leave_out_start, leave_out_end))
-        # print(f"Train data length: {len(train_indices)}, Validation data length: {len(val_indices)}")
+            leave_out_start = sum(self.train_data.subject_data_length[:leave_one_subject_out])
+            leave_out_end = sum(self.train_data.subject_data_length[:leave_one_subject_out+1]) - self.window_size + 1
+            total_length = sum(self.train_data.subject_data_length) - self.window_size + 1
+            train_indices = list(range(0, leave_out_start)) + list(range(leave_out_end, total_length))
+            val_indices = list(range(leave_out_start, leave_out_end))
 
         return train_indices, val_indices
     
@@ -156,7 +167,6 @@ class LoadData(torch.utils.data.Dataset):
 
                     input_buffer_R = None
                     input_buffer_L = None
-                    R_side_first = np.random.randint(0, 2) # Randomly select right or left side as the first column
 
                     for i, name in enumerate(input_file_names):
                         csv_path = os.path.join(input_file_dir, name)
@@ -197,6 +207,7 @@ class LoadData(torch.utils.data.Dataset):
                         print(f"\tinput file {i+1} loaded: ", name)
 
                     # Segment train data and test data based on dataset_proportion
+                    # Don't need to care for user-independent model training)
                     input_time_sec = int(input_buffer_R.shape[0]/100) # Extract recording time from input file by dividing 100 Hz
                     if self.data_type == "train_data":
                         input_buffer_R = input_buffer_R[:int(input_buffer_R.shape[0]* self.dataset_proportion), :] # Use (dataset_proportion)% of the data for training
@@ -208,6 +219,7 @@ class LoadData(torch.utils.data.Dataset):
                         input_buffer_R = input_buffer_R[:int(input_buffer_R.shape[0]* self.dataset_proportion), :] # Use 10% of the data for testing
                         input_buffer_L = input_buffer_L[:int(input_buffer_L.shape[0]* self.dataset_proportion), :]
                     
+                    R_side_first = np.random.randint(0, 2) # Randomly select right or left side as the first column
                     # Randomly select right or left side as the first column
                     if R_side_first == 0:
                         input_buffer = np.vstack((input_buffer_R, input_buffer_L))
@@ -221,8 +233,8 @@ class LoadData(torch.utils.data.Dataset):
                     label_buffer = self.load_vicon_hip_moment_data(label_file_dir, label_file_names[0], input_time_sec) # Extract recording time from input file by dividing 100 Hz
                     print(f"\tlabel file loaded: ", label_file_names)
 
-                    label_buffer_R = label_buffer[:, 0].reshape(-1, 1)
-                    label_buffer_L = label_buffer[:, 1].reshape(-1, 1)
+                    label_buffer_R = label_buffer[:, 1].reshape(-1, 1) # Right hip moment
+                    label_buffer_L = label_buffer[:, 0].reshape(-1, 1) # Left hip moment
 
                     # Segment train data and test data based on dataset_proportion
                     if self.data_type == "train_data":
