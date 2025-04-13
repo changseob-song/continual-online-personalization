@@ -281,7 +281,7 @@ class Trainer:
 
             # Plot predictions after each epoch
             test_loader = self.data_handler.create_dataloaders(test_indices=1)
-            # self.plot_predictions(test_loader, num_samples=5000, epoch=epoch+1)
+            self.plot_predictions(test_loader, num_samples=5000, epoch=epoch+1)
 
             # Early Stopping
             if self.patience_counter >= self.patience:
@@ -289,7 +289,7 @@ class Trainer:
                 # Load the best model
                 self.model.load_state_dict(torch.load(os.path.join(self.save_dir, self.hyperparam_config['wandb_session_name'] + '.pt')))
                 # Plot predictions with the best model
-                # self.plot_predictions(test_loader, num_samples=10000, epoch='best')
+                self.plot_predictions(test_loader, num_samples=10000, epoch='best')
                 break
             
             # Log metrics to wandb

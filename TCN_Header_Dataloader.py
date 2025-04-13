@@ -285,12 +285,14 @@ class LoadData(torch.utils.data.Dataset):
             self.label_std = label_std
 
     def load_vicon_hip_moment_data(self, label_file_dir, label_file_name, record_time_sec):
-            output_df = pd.read_csv(os.path.join(label_file_dir, label_file_name),
-                                    delimiter=',', skiprows=lambda x: x in range(0, record_time_sec*1000 + 10)) # skip force plate data and 10 rows of header
-            output_df = output_df.fillna(0) # fill NaN with 0
-            output_buffer = output_df.values[:, [6, 54]]/1000 # 6 for left hip, 54 for right hip, divide by 1000 to convert to Nm
-            output_buffer = self.lowpass_filter(output_buffer, order=4, cutoff_freq=6, sampling_freq=100)
-            return output_buffer
+        output_df = pd.read_csv(os.path.join(label_file_dir, label_file_name),
+                              delimiter=',',
+                              skiprows=lambda x: x in range(0, record_time_sec*1000 + 10), # skip force plate data and 10 rows of header
+                              encoding_errors='ignore') # Add this line to ignore encoding errors
+        output_df = output_df.fillna(0) # fill NaN with 0
+        output_buffer = output_df.values[:, [6, 54]]/1000 # 6 for left hip, 54 for right hip, divide by 1000 to convert to Nm
+        output_buffer = self.lowpass_filter(output_buffer, order=4, cutoff_freq=6, sampling_freq=100)
+        return output_buffer
 
     def lowpass_filter(self, data, order=4, cutoff_freq=6, sampling_freq=100):
         """
