@@ -153,18 +153,25 @@ class LoadData(torch.utils.data.Dataset):
 
         for subject_num, subject in enumerate(partitions):  # Multiple partitions
             self.subject_data_length.append(0) # Append 0 for each subject
-            for condition in os.listdir(os.path.join(root, subject)):
-                for trial in os.listdir(os.path.join(root, subject, condition)):
+            subject_path = os.path.join(root, subject)
+            if not os.path.isdir(subject_path): continue # Skip if not a directory
 
-                    input_file_dir = os.path.join(root, subject, condition, trial, 'Input')
-                    label_file_dir = os.path.join(root, subject, condition, trial, 'Label')
+            for condition in os.listdir(subject_path):
+                condition_path = os.path.join(subject_path, condition)
+                if not os.path.isdir(condition_path): continue # Skip if not a directory
+
+                for trial in os.listdir(condition_path):
+                    trial_path = os.path.join(condition_path, trial)
+                    if not os.path.isdir(trial_path): continue # Skip if not a directory
+
+                    input_file_dir = os.path.join(trial_path, 'Input')
+                    label_file_dir = os.path.join(trial_path, 'Label')
                     input_file_names = sorted(os.listdir(input_file_dir))
                     label_file_names = sorted(os.listdir(label_file_dir))
 
                     print("\n", subject, condition, trial)
 
                     # Load and concatenate all input data files
-
                     input_buffer_R = None
                     input_buffer_L = None
 
