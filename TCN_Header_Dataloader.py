@@ -192,6 +192,7 @@ class LoadData(torch.utils.data.Dataset):
                                 ]].values
                             # Left side: Flip the signs of Pelvis_Acc_Y, Pelvis_Gyr_X, Pelvis_Gyr_Z, Thigh_L_Acc_Y, Thigh_L_Gyr_X, Thigh_L_Gyr_Z
                             input_df_L[:, [1, 3, 5, 7, 9, 11]] *= -1
+                            # input_df_L[:, [1, 3, 5]] *= -1 # When only using Thigh IMU
 
                         # Extract motor data from input file
                         elif 'motor' in name.lower():
@@ -226,9 +227,9 @@ class LoadData(torch.utils.data.Dataset):
                         input_buffer_R = input_buffer_R[:int(input_buffer_R.shape[0]* self.dataset_proportion), :] # Use 10% of the data for testing
                         input_buffer_L = input_buffer_L[:int(input_buffer_L.shape[0]* self.dataset_proportion), :]
                     
-                    R_side_first = np.random.randint(0, 2) # Randomly select right or left side as the first column
                     # Randomly select right or left side as the first column
-                    if R_side_first == 0:
+                    R_side_first = np.random.randint(0, 2)
+                    if R_side_first == True:
                         input_buffer = np.vstack((input_buffer_R, input_buffer_L))
                     else:
                         input_buffer = np.vstack((input_buffer_L, input_buffer_R))
@@ -240,8 +241,8 @@ class LoadData(torch.utils.data.Dataset):
                     label_buffer = self.load_vicon_hip_moment_data(label_file_dir, label_file_names[0], input_time_sec) # Extract recording time from input file by dividing 100 Hz
                     print(f"\tlabel file loaded: ", label_file_names)
 
-                    label_buffer_R = label_buffer[:, 1].reshape(-1, 1) # Right hip moment
-                    label_buffer_L = label_buffer[:, 0].reshape(-1, 1) # Left hip moment
+                    label_buffer_R = label_buffer[:, 0].reshape(-1, 1) # Right hip moment
+                    label_buffer_L = label_buffer[:, 1].reshape(-1, 1) # Left hip moment
 
                     # Segment train data and test data based on dataset_proportion
                     if self.data_type == "train_data":
@@ -255,7 +256,7 @@ class LoadData(torch.utils.data.Dataset):
                         label_buffer_L = label_buffer_L[:int(label_buffer_L.shape[0]* self.dataset_proportion), :]
                     
                     # Randomly select right or left side as the first column
-                    if R_side_first == 0:
+                    if R_side_first == True:
                         label_buffer = np.vstack((label_buffer_R, label_buffer_L))
                     else:
                         label_buffer = np.vstack((label_buffer_L, label_buffer_R))
@@ -297,7 +298,8 @@ class LoadData(torch.utils.data.Dataset):
                               skiprows=lambda x: x in range(0, record_time_sec*1000 + 10), # skip force plate data and 10 rows of header
                               encoding_errors='ignore') # Add this line to ignore encoding errors
         output_df = output_df.fillna(0) # fill NaN with 0
-        output_buffer = output_df.values[:, [6, 54]]/1000 # 6 for left hip, 54 for right hip, divide by 1000 to convert to Nm
+        output_buffer = output_df.values[:, [54, 6]]/1000 # 54 for right hip, 6 for left hip, divide by 1000 to convert to Nm
+        output_buffer[:, 1] *= -1 # Flip the sign of left hip moment
         output_buffer = self.lowpass_filter(output_buffer, order=4, cutoff_freq=6, sampling_freq=100)
         return output_buffer
 
