@@ -181,16 +181,16 @@ class Trainer:
             plt.figure()
             plt.plot(label_true[:, i], label='True')
             plt.plot(label_pred[:, i], label='Predicted')
-            plt.title(f'Joint Angle {i}')
+            # plt.title(f'Joint Angle {i}')
             plt.xlabel('Data number')
-            plt.ylabel('Angle (degrees)')
+            plt.ylabel('Joint moment (N-m/kg)')
             plt.legend()
-            filename = os.path.join(self.save_dir, f'prediction_joint_{i}.png')
+            filename = os.path.join(self.save_dir, f'prediction_epoch_{epoch}.png')
             plt.savefig(filename)
             plt.close()
 
         # Save true and predicted labels to CSV
-        csv_file = os.path.join(self.save_dir, f'predictions.csv')
+        csv_file = os.path.join(self.save_dir, f'predictions_epoch_{epoch}.csv')
         with open(csv_file, 'w', newline='') as f:
             writer = csv.writer(f)
             # Write header
