@@ -24,8 +24,8 @@ sweep_config = {
 # Base hyperparameters
 hyperparam_config = {
     'wandb_project_name': 'Biotorque_initial',
-    'wandb_session_name': 'single_subject_validation',
-    'input_size': 8, # 12 for IMU (right and pelvis), 2 for hip angle and velocity
+    'wandb_session_name': 'bilateral_to_unilateral_wo_pelvis_test',
+    'input_size': 14, # 12 for IMU (right, left), 2 for hip angle and velocity
     'output_size': 1, # 1 for right hip torque
     'architecture': 'TCN',
     
@@ -89,7 +89,7 @@ def train():
                         'AB03_Amy',
                         'AB04_Changseob',
                         'AB05_Maria',
-                        'AB06_Vaidehi',
+                        # 'AB06_Vaidehi',
                         'AB07_Leo',
                         'AB08_Adrian',
                         'AB09_Crystal',

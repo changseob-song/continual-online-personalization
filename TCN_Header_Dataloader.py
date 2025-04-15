@@ -183,16 +183,21 @@ class LoadData(torch.utils.data.Dataset):
                             # Right side
                             input_df_R = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
                                 # 'Pelvis_Acc_X', 'Pelvis_Acc_Y', 'Pelvis_Acc_Z', 'Pelvis_Gyr_X', 'Pelvis_Gyr_Y', 'Pelvis_Gyr_Z',
-                                'Thigh_R_Acc_X', 'Thigh_R_Acc_Y', 'Thigh_R_Acc_Z', 'Thigh_R_Gyr_X', 'Thigh_R_Gyr_Y', 'Thigh_R_Gyr_Z'
+                                'Thigh_R_Acc_X', 'Thigh_R_Acc_Y', 'Thigh_R_Acc_Z', 'Thigh_R_Gyr_X', 'Thigh_R_Gyr_Y', 'Thigh_R_Gyr_Z',
+                                'Thigh_L_Acc_X', 'Thigh_L_Acc_Y', 'Thigh_L_Acc_Z', 'Thigh_L_Gyr_X', 'Thigh_L_Gyr_Y', 'Thigh_L_Gyr_Z'
                                 ]].values
                             # Left side
                             input_df_L = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
                                 # 'Pelvis_Acc_X', 'Pelvis_Acc_Y', 'Pelvis_Acc_Z', 'Pelvis_Gyr_X', 'Pelvis_Gyr_Y', 'Pelvis_Gyr_Z',
-                                'Thigh_L_Acc_X', 'Thigh_L_Acc_Y', 'Thigh_L_Acc_Z', 'Thigh_L_Gyr_X', 'Thigh_L_Gyr_Y', 'Thigh_L_Gyr_Z'
+                                'Thigh_L_Acc_X', 'Thigh_L_Acc_Y', 'Thigh_L_Acc_Z', 'Thigh_L_Gyr_X', 'Thigh_L_Gyr_Y', 'Thigh_L_Gyr_Z',
+                                'Thigh_R_Acc_X', 'Thigh_R_Acc_Y', 'Thigh_R_Acc_Z', 'Thigh_R_Gyr_X', 'Thigh_R_Gyr_Y', 'Thigh_R_Gyr_Z'
                                 ]].values
-                            # Left side: Flip the signs of Pelvis_Acc_Y, Pelvis_Gyr_X, Pelvis_Gyr_Z, Thigh_L_Acc_Y, Thigh_L_Gyr_X, Thigh_L_Gyr_Z
-                            # input_df_L[:, [1, 3, 5, 7, 9, 11]] *= -1
-                            input_df_L[:, [1, 3, 5]] *= -1 # When only using Thigh IMU
+                            # Left side: Flip the signs of 
+                                # Pelvis_Acc_Y, Pelvis_Gyr_X, Pelvis_Gyr_Z, 
+                                # Thigh_L_Acc_Y, Thigh_L_Gyr_X, Thigh_L_Gyr_Z,
+                                # Thigh_R_Acc_Y, Thigh_R_Gyr_X, Thigh_R_Gyr_Z
+                            # input_df_L[:, [1, 3, 5, 7, 9, 11, 13, 15, 17]] *= -1
+                            input_df_L[:, [1, 3, 5, 7, 9, 11]] *= -1 # When only using Thigh IMU
 
                         # Extract motor data from input file
                         elif 'motor' in name.lower():
