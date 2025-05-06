@@ -57,7 +57,7 @@ class Trainer:
         absolute_error = torch.abs(preds_denorm - targets_denorm)
 
         # Determine which predictions are within the threshold
-        threshold = 1.0 # deg unit, self.hyperparam_config['accuracy_threshold']
+        threshold = 0.05 # N-m/kg for moment
         accurate_predictions = (absolute_error <= threshold).float()
 
         # Compute the mean accuracy across all outputs and samples
