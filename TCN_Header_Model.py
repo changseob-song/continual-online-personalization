@@ -67,7 +67,7 @@ class TCNModel(nn.Module):
         self.window_size = hyperparameter_config['window_size']  # Get the sequence length
         
         self.tcn = TemporalConvNet(self.input_size, self.num_channels, self.number_of_layers, self.kernel_size, self.dropout, self.dilations)
-        self.linear = nn.Linear(self.num_channels[-1], self.output_size)
+        self.linear = nn.Linear(self.num_channels[-1] * self.window_size, self.output_size)
         
         print("\nTCN parameter #: ", sum(p.numel() for p in self.tcn.parameters()))
         print("\nFCNN parameter #: ",sum(p.numel() for p in self.linear.parameters()))
@@ -78,6 +78,54 @@ class TCNModel(nn.Module):
     def forward(self, x):
         # x shape: (batch_size, input_size, time window size = sequence length)
         y = self.tcn(x)
-        y = y[:, :, -1]  # Take the last time step
+        # Flatten the output from the TCN layer
+        y = y.flatten(start_dim=1) # Shape: (batch_size, num_channels[-1] * sequence_length)
         y = self.linear(y)
         return y
+    
+class LSTMModel(nn.Module):
+    def __init__(self, hyperparameter_config):
+        super(LSTMModel, self).__init__()
+        self.input_size = hyperparameter_config['input_size']
+        self.hidden_dim = hyperparameter_config['lstm_hidden_dim'] # Use a specific LSTM hidden dim
+        self.num_layers = hyperparameter_config['lstm_num_layers'] # Use a specific LSTM num layers
+        self.output_size = hyperparameter_config['output_size']
+        self.dropout = hyperparameter_config.get('dropout', 0.2) # Use dropout from config or default
+
+        self.lstm = nn.LSTM(self.input_size, self.hidden_dim, self.num_layers,
+                            batch_first=True, dropout=self.dropout if self.num_layers > 1 else 0)
+        self.linear = nn.Linear(self.hidden_dim, self.output_size)
+        self.init_weights()
+        print("LSTM parameter #: ", sum(p.numel() for p in self.lstm.parameters()) + sum(p.numel() for p in self.linear.parameters()))
+
+    def init_weights(self):
+        # Initialize LSTM weights and biases
+        for name, param in self.lstm.named_parameters():
+            if 'weight_ih' in name or 'weight_hh' in name:
+                # Initialize weight matrices orthogonally
+                nn.init.orthogonal_(param.data)
+            elif 'bias' in name:
+                # Initialize biases to zero
+                nn.init.constant_(param.data, 0)
+                # Optional: Initialize forget gate bias to 1 (helps initial learning)
+                # LSTM biases are ordered: [input_gate, forget_gate, cell_gate, output_gate]
+                # Find the forget gate bias part (second quarter of the bias vector)
+                n = param.size(0)
+                start, end = n // 4, n // 2
+                nn.init.constant_(param.data[start:end], 1.)
+
+        # Initialize linear layer weights
+        nn.init.xavier_uniform_(self.linear.weight)
+        if self.linear.bias is not None:
+            nn.init.constant_(self.linear.bias, 0)
+
+    def forward(self, x):
+        # x shape: (batch_size, input_size, seq_len)
+        lstm_out, (hn, cn) = self.lstm(x.transpose(1,2))
+        # lstm_out shape: (batch_size, seq_len, hidden_dim)
+        # hn shape: (num_layers, batch_size, hidden_dim)
+
+        # Use the hidden state of the last layer from the last time step
+        last_hidden_state = hn[-1] # Shape: (batch_size, hidden_dim)
+        z = self.linear(last_hidden_state) # Shape: (batch_size, output_size)
+        return z
