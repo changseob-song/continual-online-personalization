@@ -12,13 +12,9 @@ if __name__ == '__main__':
 
     # Trial setting
     trial_name = 'debug'
-    trial_start_sec = 2  # seconds
-    trial_dur_sec = 120  # seconds
     pulse_after_start = 2 # seconds
+    trial_dur_sec = 120  # seconds
     exo_ON = True
-
-    # Online adaptation setting
-    update_interval_sec = 5  # seconds
 
     # Trigger setting
     trigger_type = "typing"  # "mocap" or "typing"
@@ -28,16 +24,15 @@ if __name__ == '__main__':
 
     # Model path
     # tcn_only
-    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/hyperparam_optimized-all_subjects/hyperparam_optimized-all_subjects_tcn.trt'
+    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/hyperparam_optimized-input_modality_7/hyperparam_optimized-input_modality_7_tcn.trt'
     # entire model (TCN + linear layer)
-    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/hyperparam_optimized-all_subjects/hyperparam_optimized-all_subjects.pt'
+    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/hyperparam_optimized-input_modality_7/hyperparam_optimized-input_modality_7.pt'
     # torque profile path
     torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE/avg_biological_hip_torque.pkl'
 
     # Initialize Control loop class
     controller = Controller(pt_model_path, trt_engine_path, torque_profile_path, trigger_type, trial_name,
-                            trial_start_sec, trial_dur_sec, pulse_after_start,
-                            update_interval_sec,)
+                            pulse_after_start, trial_dur_sec)
     
     if controller.trigger_type == "mocap":
         mocap_trigger = Mocap_trigger()

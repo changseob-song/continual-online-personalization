@@ -11,16 +11,14 @@ from scipy.signal import find_peaks
 
 class Controller:
     def __init__(self, pt_model_path, trt_engine_path, torque_profile_path,
-                 trigger_type, trial_name, trial_start_sec, trial_dur_sec, pulse_after_start,
-                 update_interval_sec):
+                 trigger_type, trial_name, pulse_after_start, trial_dur_sec):
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
         self.trt_engine_path = trt_engine_path
         self.trigger_type = trigger_type
         self.trial_name = trial_name
-        self.trial_start_sec = trial_start_sec
-        self.trial_dur_sec = trial_dur_sec
         self.pulse_after_start = pulse_after_start
+        self.trial_dur_sec = trial_dur_sec
         self.paretic_side = None
         self.pask_peak_len_L = 0
         self.pask_peak_len_R = 0
@@ -29,7 +27,7 @@ class Controller:
             self.torque_profile = NumpyCompatUnpickler(f).load()
 
         # Initialize data structures to save data
-        max_samples = int((trial_dur_sec + trial_start_sec + 5) * 100)
+        max_samples = int((self.trial_dur_sec + self.pulse_after_start) * 100)
         self.data_to_save = {
             'timestamp': np.zeros(max_samples),
             'mtr_pos_L': np.zeros(max_samples), 'mtr_pos_R': np.zeros(max_samples),
@@ -88,7 +86,6 @@ class Controller:
 
         # Initialize OnlineAdaptator
         self.online_adaptator = OnlineAdaptator(self.pt_model_path)
-        self.update_interval_sec = update_interval_sec
 
     def run_loop(self, Exo_ON=False):
 
@@ -98,7 +95,8 @@ class Controller:
 
         # Rolling array initialization of model output array (2xframe_length)
         model_input_arr = np.zeros((2, self.num_input_features, self.Exo.frame_length), dtype=np.float32)
-        input_stream_data = np.zeros((2, self.num_input_features, self.update_interval_sec* self.Exo.control_freq_Hz), dtype=np.float32)  # 100 frames of input data
+        # Predefine input stream data size for online adaptation (6 seconds buffer)
+        input_stream_data = np.zeros((2, self.num_input_features, 6 * self.Exo.control_freq_Hz), dtype=np.float32)  # 100 frames of input data
         motor_cmd_array = np.zeros((2, self.Exo.frame_length), dtype=np.float32)  # for torque command filtering
 
         current_pos_L, current_vel_L = 0.0, 0.0
@@ -182,8 +180,8 @@ class Controller:
             l_data_reflected[5] *= -1
             
             # 4. Prepare the model input data
-            right_data = np.hstack((local_r_data, np.array([current_pos_R]), local_r_data[4]))
-            left_data = np.hstack((l_data_reflected, np.array([current_pos_L]), l_data_reflected[4]))
+            right_data = np.hstack((local_r_data, np.array([current_pos_R])))
+            left_data = np.hstack((l_data_reflected, np.array([current_pos_L])))
 
             right_data_norm = (right_data - self.input_mean) / self.input_std
             left_data_norm = (left_data - self.input_mean) / self.input_std
@@ -200,15 +198,14 @@ class Controller:
                 input_stream_data[1, :, -1] = left_data
 
             # When it's time to update, send data for both sides to the worker
-            if start_index_after_first_pulse > (5 * self.Exo.control_freq_Hz):
-
                 update_freq_gc = 2
                 peak_indices_L, _ = find_peaks(-np.array(self.data_to_save['mtr_pos_L']), height=None, distance=15, prominence=10)
                 peak_indices_R, _ = find_peaks(-np.array(self.data_to_save['mtr_pos_R']), height=None, distance=15, prominence=10)
-                buffer_start_abs = start_index - len(input_stream_data[0, 0, :])
+                buffer_start_abs = start_index - len(input_stream_data[0, 0, :]) # This is the start index of input_stream_data
 
                 # Use only the data between the first and last peaks
                 if len(peak_indices_R) >= (gc_idx_R + update_freq_gc + 1): # at least 3 gait cycles needed
+                    print(buffer_start_abs, start_index, len(input_stream_data[0, 0, :]))
                     gc_idx_R = gc_idx_R + update_freq_gc
                     print(f"gc progress R: {gc_idx_R}")
                     start_idx_few_cycles_R = peak_indices_R[-(update_freq_gc+1)] - buffer_start_abs
@@ -231,11 +228,9 @@ class Controller:
                 if side == 'R':
                     self.linear_weights_R = weights
                     self.linear_biases_R = biases
-                    print("Updated weights and biases for right side.")
                 elif side == 'L':
                     self.linear_weights_L = weights
                     self.linear_biases_L = biases
-                    print("Updated weights and biases for left side.")
 
             # 5. TensorRT inference & Apply linear layer weights and biases
             self.input_q.put((model_input_arr[0, :, :].copy(), model_input_arr[1, :, :].copy()))
@@ -294,7 +289,7 @@ class Controller:
             current_time = time.time() - start_time
             
             # 첫 번째 펄스
-            if current_time >= (self.trial_start_sec + self.pulse_after_start) and not first_pulse_sent:
+            if current_time >= (self.pulse_after_start) and not first_pulse_sent:
                 self.GPIO_control.send_gpio_pulse_start()
                 first_pulse_sent = True
                 first_pulse_end_time = current_time + 0.2  # 200ms 펄스 지속시간
@@ -307,7 +302,7 @@ class Controller:
                 print("First pulse ended")
             
             # 두 번째 펄스
-            if current_time >= (self.trial_start_sec + self.trial_dur_sec + self.pulse_after_start) and not second_pulse_sent:
+            if current_time >= (self.pulse_after_start + self.trial_dur_sec) and not second_pulse_sent:
                 self.GPIO_control.send_gpio_pulse_start()
                 second_pulse_sent = True
                 second_pulse_end_time = current_time + 0.2  # 200ms 펄스 지속시간
@@ -354,7 +349,7 @@ class Controller:
         self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_L, 0)
         self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, 0)
 
-        save_data(self.data_to_save, self.trial_name, self.trial_start_sec, self.trial_dur_sec)
+        save_data(self.data_to_save, self.trial_name, self.pulse_after_start, self.trial_dur_sec)
         cleanup_can(self.Exo.bus, self.Exo.notifier)
         self.GPIO_control.safe_gpio_cleanup()
 

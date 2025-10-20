@@ -175,15 +175,15 @@ def inference_worker(input_q, output_q, trt_engine_path,
 
 
 # Function to save all collected data
-def save_data(data_to_save, trial_name, start_rec_sec=0, trial_time_sec=None):
+def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None):
 
     # Convert lists to NumPy arrays
     data_np = {k: np.array(v) for k, v in data_to_save.items()}
 
     # Determine the number of samples to save
     min_len = min(v.shape[0] for v in data_np.values())
-    start_idx = int(start_rec_sec * 100)
-    end_idx = min(min_len, int((start_rec_sec + trial_time_sec) * 100)) if trial_time_sec else min_len
+    start_idx = int(pulse_after_start * 100)
+    end_idx = min(min_len, int((pulse_after_start + trial_dur_sec) * 100)) if trial_dur_sec else min_len
 
     print(f'Slicing data from index {start_idx} to {end_idx}.')
 
