@@ -11,15 +11,18 @@ from scipy.signal import find_peaks
 
 class Controller:
     def __init__(self, pt_model_path, trt_engine_path, torque_profile_path,
-                 trigger_type, trial_name, pulse_after_start, trial_dur_sec):
+                 trigger_type, trial_name, pulse_after_start, trial_dur_sec, body_mass_kg,
+                 task_stream, task_interval):
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
         self.trt_engine_path = trt_engine_path
         self.trigger_type = trigger_type
         self.trial_name = trial_name
+        self.body_mass_kg = body_mass_kg
         self.pulse_after_start = pulse_after_start
         self.trial_dur_sec = trial_dur_sec
-        self.paretic_side = None
+        self.task_stream = task_stream
+        self.task_interval = task_interval
         self.last_used_peak_idx_L = 0
         self.last_used_peak_idx_R = 0
 
@@ -131,9 +134,7 @@ class Controller:
         first_pulse_end_time = None
         second_pulse_sent = False
         second_pulse_end_time = None
-        start_time = time.time()
-        start_index = 1
-        start_index_after_first_pulse = 1
+        loop_index = 1
 
         # Wait for the trigger to start the trial
         if self.trigger_type == "mocap":
@@ -145,7 +146,7 @@ class Controller:
 
         # Main control loop
         while True:
-            time_1 = time.time()
+            loop_time_start = time.time()
 
             # 0. Check if the trial time has exceeded
             if self.trigger_type == "mocap" and not logging_started:
@@ -160,6 +161,12 @@ class Controller:
             if not logging_started:
                 continue
 
+            # Get the task index
+            task_idx = int((loop_index/self.Exo.control_freq_Hz - self.pulse_after_start)//self.task_interval)
+            task_idx = max(0, task_idx)
+            incline, speed = self.task_stream[task_idx].split('-')
+            # print(f"Current task: Incline {incline}, Speed {speed}", end='\r')
+
             # 1. Read the motor encoder values
             current_pos_L, current_vel_L = self.Exo.update_readings(self.Exo.CAN_id_L)
             current_pos_R, current_vel_R = self.Exo.update_readings(self.Exo.CAN_id_R)
@@ -167,18 +174,18 @@ class Controller:
             current_pos_R *= -1
             current_vel_R *= -1
 
-            log_mtr_pos_L[start_index] = current_pos_L; log_mtr_pos_R[start_index] = current_pos_R
-            log_mtr_vel_L[start_index] = current_vel_L; log_mtr_vel_R[start_index] = current_vel_R
+            log_mtr_pos_L[loop_index] = current_pos_L; log_mtr_pos_R[loop_index] = current_pos_R
+            log_mtr_vel_L[loop_index] = current_vel_L; log_mtr_vel_R[loop_index] = current_vel_R
 
             # 2. Read the IMU values
             imu_dict = self.Exo.imus.read_IMUs()
 
             local_p_data = imu_dict["IMU_PELVIS"]
-            log_imu_P[start_index, :] = local_p_data
+            log_imu_P[loop_index, :] = local_p_data
             local_l_data = imu_dict["IMU_THIGH_LEFT"]
-            log_imu_L[start_index, :] = local_l_data
+            log_imu_L[loop_index, :] = local_l_data
             local_r_data = imu_dict["IMU_THIGH_RIGHT"]
-            log_imu_R[start_index, :] = local_r_data
+            log_imu_R[loop_index, :] = local_r_data
 
             # 3. Mirror the left data to the right side
             p_data_reflected = local_p_data.copy()
@@ -206,7 +213,7 @@ class Controller:
 
             # 4.1 Prepare the input data for online adaptation
             if first_pulse_sent:
-                start_index_after_first_pulse += 1
+
                 input_stream_data = fast_roll(input_stream_data)
                 input_stream_data[0, :, -1] = right_data # Make sure not to put normalized data here
                 input_stream_data[1, :, -1] = left_data
@@ -216,60 +223,56 @@ class Controller:
                 
                 # Optimized peak detection on recent data
                 search_window = 500 # Search in the last 5 seconds
-                search_start_idx = max(0, start_index - search_window)
-                recent_pos_L = self.data_to_save['mtr_pos_L'][search_start_idx:start_index]
-                recent_pos_R = self.data_to_save['mtr_pos_R'][search_start_idx:start_index]
+                search_start_idx = max(0, loop_index - search_window)
+                recent_pos_L = self.data_to_save['mtr_pos_L'][search_start_idx:loop_index]
+                recent_pos_R = self.data_to_save['mtr_pos_R'][search_start_idx:loop_index]
 
                 peak_indices_L, _ = find_peaks(-recent_pos_L, height=None, distance=15, prominence=10)
-                peak_indices_L += search_start_idx
+                peak_indices_L += search_start_idx # This makes the indices back to absolute timeframe
                 peak_indices_R, _ = find_peaks(-recent_pos_R, height=None, distance=15, prominence=10)
                 peak_indices_R += search_start_idx
                 
-                buffer_start_abs = start_index - len(input_stream_data[0, 0, :])
+                buffer_start_abs = loop_index - len(input_stream_data[0, 0, :])
 
-                # Right side adaptation trigger
-                if len(peak_indices_R) > 0:
-                    # Find where our last used peak is in the current list of peaks
-                    start_peak_list_idx = np.searchsorted(peak_indices_R, self.last_used_peak_idx_R, side='left')
-                    
-                    # Check if there are enough new peaks for an update (2 gait cycles = 2 new peaks after the start)
-                    if (len(peak_indices_R) - start_peak_list_idx) > update_freq_gc:
-                        # Define the window of peaks for this update
-                        end_peak_list_idx = start_peak_list_idx + update_freq_gc
-                        
+                # Check if there are enough new peaks for an update (2 gait cycles = 2 new peaks after the start)
+                if self.last_used_peak_idx_R not in peak_indices_R:
+                    if len(peak_indices_R) > update_freq_gc:
                         # Get the absolute start and end indices for the data slice
-                        start_idx_abs = peak_indices_R[start_peak_list_idx]
-                        end_idx_abs = peak_indices_R[end_peak_list_idx]
+                        start_idx_abs = peak_indices_R[0]
+                        end_idx_abs = peak_indices_R[-1]
+                        print('R', start_idx_abs, peak_indices_R[-2], end_idx_abs)
+                        mid_peak_idx_rel = peak_indices_R[1:-1] - start_idx_abs # This is relative about start_idx_abs
 
                         # Slice the data from the input stream buffer
                         start_idx_rel = start_idx_abs - buffer_start_abs
                         end_idx_rel = end_idx_abs - buffer_start_abs
                         input_stream_data_R = input_stream_data[0, :, start_idx_rel:end_idx_rel]
                         
-                        self.online_adaptator.trigger_finetuning('R', input_stream_data_R.T.copy())
+                        self.online_adaptator.trigger_finetuning('R', incline, speed, input_stream_data_R.T.copy(), mid_peak_idx_rel)
                         # print(f"Triggering R adaptation from index {start_idx_abs} to {end_idx_abs}")
 
                         # Update the last used peak to the end of the current window
                         self.last_used_peak_idx_R = end_idx_abs
 
-                # Left side adaptation trigger (identical logic)
-                if len(peak_indices_L) > 0:
-                    start_peak_list_idx = np.searchsorted(peak_indices_L, self.last_used_peak_idx_L, side='left')
-                    
-                    if (len(peak_indices_L) - start_peak_list_idx) > update_freq_gc:
-                        end_peak_list_idx = start_peak_list_idx + update_freq_gc
+                # Check if there are enough new peaks for an update (2 gait cycles = 2 new peaks after the start)
+                if self.last_used_peak_idx_L not in peak_indices_L:
+                    if len(peak_indices_L) > update_freq_gc:
+                        # Get the absolute start and end indices for the data slice
+                        start_idx_abs = peak_indices_L[0]
+                        end_idx_abs = peak_indices_L[-1]
+                        mid_peak_idx_rel = peak_indices_L[1:-1] - start_idx_abs # This is relative about start_idx_abs
                         
-                        start_idx_abs = peak_indices_L[start_peak_list_idx]
-                        end_idx_abs = peak_indices_L[end_peak_list_idx]
-
+                        # Slice the data from the input stream buffer
                         start_idx_rel = start_idx_abs - buffer_start_abs
                         end_idx_rel = end_idx_abs - buffer_start_abs
                         input_stream_data_L = input_stream_data[1, :, start_idx_rel:end_idx_rel]
                         
-                        self.online_adaptator.trigger_finetuning('L', input_stream_data_L.T.copy())
+                        self.online_adaptator.trigger_finetuning('L', incline, speed, input_stream_data_L.T.copy(), mid_peak_idx_rel)
                         # print(f"Triggering L adaptation from index {start_idx_abs} to {end_idx_abs}")
-                        
+
+                        # Update the last used peak to the end of the current window
                         self.last_used_peak_idx_L = end_idx_abs
+
             # Check for new weights from the adaptation worker
             updated_params = self.online_adaptator.get_updated_weights()
             if updated_params:
@@ -309,8 +312,8 @@ class Controller:
             delayed_gait_phase_L = (gait_phase_L - self.Exo.delay_factor) % 100
 
             # 7. Send the torque command to the motors
-            motor_cmd_val_L = self.torque_profile['LG']['1p0mps'][int(delayed_gait_phase_L)] * self.Exo.scale_factor
-            motor_cmd_val_R = self.torque_profile['LG']['1p0mps'][int(delayed_gait_phase_R)] * self.Exo.scale_factor
+            motor_cmd_val_L = self.torque_profile[incline][speed][int(delayed_gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor
+            motor_cmd_val_R = self.torque_profile[incline][speed][int(delayed_gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor
 
             motor_cmd_array = fast_roll(motor_cmd_array)
             motor_cmd_array[:, -1] = [motor_cmd_val_R, motor_cmd_val_L]    
@@ -330,48 +333,45 @@ class Controller:
             self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, motor_cmd_val_R)
 
             # 8. Stack the data (that will be saved after the trial)
-            log_mtr_cmd_L[start_index] = motor_cmd_val_L
-            log_mtr_cmd_R[start_index] = motor_cmd_val_R
+            log_mtr_cmd_L[loop_index] = motor_cmd_val_L
+            log_mtr_cmd_R[loop_index] = motor_cmd_val_R
 
-            log_gait_phase_L[start_index] = gait_phase_L
-            log_gait_phase_R[start_index] = gait_phase_R
+            log_gait_phase_L[loop_index] = gait_phase_L
+            log_gait_phase_R[loop_index] = gait_phase_R
 
-            # GPIO 펄스 로직 추가
+            # GPIO pulse logic starting from here
             current_time = time.time() - start_time
             
-            # 첫 번째 펄스
+            # First pulse
             if current_time >= (self.pulse_after_start) and not first_pulse_sent:
                 self.GPIO_control.send_gpio_pulse_start()
                 first_pulse_sent = True
-                first_pulse_end_time = current_time + 0.2  # 200ms 펄스 지속시간
+                first_pulse_end_time = current_time + 0.2  # 200ms pulse duration
                 print("First pulse sent")
-            
-            # 첫 번째 펄스 종료
+            # First pulse end
             if first_pulse_sent and first_pulse_end_time and current_time >= first_pulse_end_time:
                 self.GPIO_control.send_gpio_pulse_end()
                 first_pulse_end_time = None
                 print("First pulse ended")
             
-            # 두 번째 펄스
+            # Second pulse
             if current_time >= (self.pulse_after_start + self.trial_dur_sec) and not second_pulse_sent:
                 self.GPIO_control.send_gpio_pulse_start()
                 second_pulse_sent = True
-                second_pulse_end_time = current_time + 0.2  # 200ms 펄스 지속시간
+                second_pulse_end_time = current_time + 0.2  # 200ms pulse duration
                 print("Second pulse sent")
             
-            # 두 번째 펄스 종료
+            # Second pulse end
             if second_pulse_sent and second_pulse_end_time and current_time >= second_pulse_end_time:
                 self.GPIO_control.send_gpio_pulse_end()
                 second_pulse_end_time = None
                 print("Second pulse ended")
 
-            # GPIO 상태 로깅 (100Hz로)
-            log_gpio_output[start_index] = self.GPIO_control.get_gpio_output_state()
+            # GPIO output logging
+            log_gpio_output[loop_index] = self.GPIO_control.get_gpio_output_state()
 
             # 9. Loop time
-            time_0 = time.time()
-            loop_time = time_0 - time_1
-            loop_time_exceeded = (time.time() - start_time) - (start_index / self.Exo.control_freq_Hz)
+            loop_time_exceeded = (time.time() - start_time) - (loop_index / self.Exo.control_freq_Hz)
 
             # 10. Send telemetry data
             telemetry_data = {
@@ -384,15 +384,17 @@ class Controller:
                 "update_time_R": update_time_R,
                 "update_time_L": update_time_L,
                 "loop_time_exceeded": loop_time_exceeded,
+                "incline": incline,
+                "speed": speed
             }
             self.teleplot.sendBatchTelemetry(telemetry_data)
 
             # 11. Wait for the time to reach the next clock cycle
-            if (time.time() - start_time) < (start_index / self.Exo.control_freq_Hz):
-                while (time.time() - start_time) < (start_index / self.Exo.control_freq_Hz):
+            if (time.time() - start_time) < (loop_index / self.Exo.control_freq_Hz):
+                while (time.time() - start_time) < (loop_index / self.Exo.control_freq_Hz):
                     pass
-            log_timestamp[start_index] = time.time() - start_time
-            start_index += 1
+            log_timestamp[loop_index] = time.time() - start_time
+            loop_index += 1
 
     # Signal handler for graceful exit
     def exit_signal_handler(self, sig, frame):

@@ -22,6 +22,14 @@ if __name__ == '__main__':
     # Body mass setting
     body_mass_kg = 72  # kg
 
+    # Task stream
+    task_stream = ['LG-1p0mps', 'LG-0p4mps',
+                   'RA_5deg-0p5mps', 'RA_5deg-0p8mps',
+                   'LG-0p6mps', 'LG-0p8mps',
+                   'RD_10deg-0p8mps', 'RD_10deg-1p0mps',
+                   'LG-0p5mps', 'LG-0p7mps']
+    task_interval = 10 # seconds
+
     # Model path
     # tcn_only
     trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/hyperparam_optimized-input_modality_7/hyperparam_optimized-input_modality_7_tcn.trt'
@@ -31,8 +39,12 @@ if __name__ == '__main__':
     torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE/avg_biological_hip_torque.pkl'
 
     # Initialize Control loop class
-    controller = Controller(pt_model_path, trt_engine_path, torque_profile_path, trigger_type, trial_name,
-                            pulse_after_start, trial_dur_sec)
+    controller = Controller(pt_model_path, trt_engine_path, torque_profile_path,
+                            trigger_type, trial_name,
+                            pulse_after_start, trial_dur_sec,
+                            body_mass_kg,
+                            task_stream, task_interval
+                            )
     
     if controller.trigger_type == "mocap":
         mocap_trigger = Mocap_trigger()

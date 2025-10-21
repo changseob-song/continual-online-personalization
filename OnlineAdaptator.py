@@ -20,7 +20,7 @@ def adaptation_worker_warmup(model, optimizer, criterion, device, model_path, in
         dummy_input_data[250, 6] = -100
 
         # Use one of the models (e.g., model_R) for the warm-up
-        warmup_dataset = LoadData('R', dummy_input_data, model_path, input_mean, input_std, label_mean, label_std)
+        warmup_dataset = LoadData('R', 'LG', '1p0mps', dummy_input_data, np.array([10]), model_path, input_mean, input_std, label_mean, label_std)
         if warmup_dataset.initilized and len(warmup_dataset) > 0:
             warmup_loader = DataLoader(warmup_dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
             
@@ -75,11 +75,16 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config):
 
     adaptation_worker_warmup(model_R, optimizer_R, criterion, device, model_path, input_mean, input_std, label_mean, label_std)
 
+    inclinations_all = ['RD_10deg', 'RD_7p5deg', 'RD_5deg', 'RD_2p5deg', 'LG', 'RA_2p5deg', 'RA_5deg', 'RA_7p5deg', 'RA_10deg']
+    speeds_all = ['0p2mps', '0p3mps', '0p4mps', '0p5mps', '0p6mps', '0p7mps', '0p8mps', '0p9mps', '1p0mps', '1p1mps', '1p2mps', '1p3mps', '1p4mps']
+    bin_state = {inc: {spd: 0 for spd in speeds_all} for inc in inclinations_all}
+    st_replay_buffer = {inc: {spd: {gc: None for gc in range(2)} for spd in speeds_all} for inc in inclinations_all}
+
     # Main loop to wait for data and fine-tune
     while True:
         try:
             # Wait for data from the main controller
-            side, input_data = input_q.get() # input data shape : (length, channel num)
+            side, incline, speed, input_data, mid_peak_idx = input_q.get() # input data shape : (length, channel num)
 
             if side is None: # Shutdown signal
                 print("Adaptation Worker: Shutdown signal received.")
@@ -92,7 +97,7 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config):
             optimizer = optimizer_R if side == 'R' else optimizer_L
             
             # Create dataset
-            dataset = LoadData(side, input_data, model_path, input_mean, input_std, label_mean, label_std)
+            dataset = LoadData(side, incline, speed, input_data, mid_peak_idx, model_path, input_mean, input_std, label_mean, label_std)
 
             # If LoadData returns nothing, skip the current update.
             if not dataset.initilized: continue
@@ -143,9 +148,9 @@ class OnlineAdaptator():
         )
         self.adaptation_process.start()
 
-    def trigger_finetuning(self, side, input_data):
+    def trigger_finetuning(self, side, incline, speed, input_data, mid_peak_idx):
         """Sends data to the adaptation worker to start fine-tuning."""
-        self.input_q.put((side, input_data))
+        self.input_q.put((side, incline, speed, input_data, mid_peak_idx))
 
     def get_updated_weights(self):
         """Checks for and returns updated weights from the worker."""
@@ -160,14 +165,13 @@ class OnlineAdaptator():
         self.adaptation_process.join() # Wait for the process to finish
 
 class LoadData(Dataset):
-    def __init__(self, side, input_data, model_path, input_mean, input_std, label_mean, label_std, gait_cycle_index=None, num_gait_cycles=None):
+    def __init__(self, side, incline, speed, input_data, mid_peak_idx, model_path, input_mean, input_std, label_mean, label_std, gait_cycle_index=None, num_gait_cycles=None):
         self.input = input_data
         self.window_size = hyperparam_config['window_size']
         self.model_path = model_path
         self.initilized = False
 
-        peak_indices, _ = find_peaks(-self.input[:, 6], height= None, distance=15, prominence=10)
-        peak_indices = peak_indices.tolist()
+        peak_indices = mid_peak_idx.tolist()
         peak_indices.insert(0, 0)  # Add start index
         peak_indices.append(self.input.shape[0])  # Add end index
 
