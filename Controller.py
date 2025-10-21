@@ -20,8 +20,8 @@ class Controller:
         self.pulse_after_start = pulse_after_start
         self.trial_dur_sec = trial_dur_sec
         self.paretic_side = None
-        self.pask_peak_len_L = 0
-        self.pask_peak_len_R = 0
+        self.last_used_peak_idx_L = 0
+        self.last_used_peak_idx_R = 0
 
         with open(torque_profile_path, "rb") as f:
             self.torque_profile = NumpyCompatUnpickler(f).load()
@@ -50,10 +50,10 @@ class Controller:
         label_mean_path = os.path.join(base_model_path, 'label_mean.npy')
         label_std_path = os.path.join(base_model_path, 'label_std.npy')
 
-        self.input_mean = np.load(input_mean_path).astype(np.float32)
-        self.input_std = np.load(input_std_path).astype(np.float32)
-        self.label_mean = np.load(label_mean_path).astype(np.float32)
-        self.label_std = np.load(label_std_path).astype(np.float32)
+        self.input_mean = np.load(input_mean_path)
+        self.input_std = np.load(input_std_path)
+        self.label_mean = np.load(label_mean_path)
+        self.label_std = np.load(label_std_path)
         self.num_input_features = self.input_mean.shape[0]
 
         # Initialize the exoskeleton
@@ -106,12 +106,24 @@ class Controller:
         local_l_data = np.zeros(6)
         local_r_data = np.zeros(6)
 
+        right_data = np.zeros(self.num_input_features)
+        left_data = np.zeros(self.num_input_features)
+
         last_model_output_r = np.zeros((80, 100), dtype=np.float32)
         last_model_output_l = np.zeros((80, 100), dtype=np.float32)
         model_output_r_val = last_model_output_r
         model_output_l_val = last_model_output_l
 
-        gc_idx_R, gc_idx_L = 0, 0
+        update_time_R, update_time_L = 0.0, 0.0
+
+        # Create local references to data arrays for faster access
+        log_timestamp = self.data_to_save['timestamp']
+        log_mtr_pos_L, log_mtr_pos_R = self.data_to_save['mtr_pos_L'], self.data_to_save['mtr_pos_R']
+        log_mtr_vel_L, log_mtr_vel_R = self.data_to_save['mtr_vel_L'], self.data_to_save['mtr_vel_R']
+        log_mtr_cmd_L, log_mtr_cmd_R = self.data_to_save['mtr_cmd_L'], self.data_to_save['mtr_cmd_R']
+        log_gait_phase_L, log_gait_phase_R = self.data_to_save['gait_phase_L'], self.data_to_save['gait_phase_R']
+        log_imu_P, log_imu_L, log_imu_R = self.data_to_save['imu_P'], self.data_to_save['imu_L'], self.data_to_save['imu_R']
+        log_gpio_output = self.data_to_save['gpio_output']
 
         # Start recording time
         logging_started = False
@@ -155,18 +167,18 @@ class Controller:
             current_pos_R *= -1
             current_vel_R *= -1
 
-            self.data_to_save['mtr_pos_L'][start_index] = current_pos_L; self.data_to_save['mtr_pos_R'][start_index] = current_pos_R
-            self.data_to_save['mtr_vel_L'][start_index] = current_vel_L; self.data_to_save['mtr_vel_R'][start_index] = current_vel_R
+            log_mtr_pos_L[start_index] = current_pos_L; log_mtr_pos_R[start_index] = current_pos_R
+            log_mtr_vel_L[start_index] = current_vel_L; log_mtr_vel_R[start_index] = current_vel_R
 
             # 2. Read the IMU values
             imu_dict = self.Exo.imus.read_IMUs()
 
             local_p_data = imu_dict["IMU_PELVIS"]
-            self.data_to_save['imu_P'][start_index, :] = local_p_data
+            log_imu_P[start_index, :] = local_p_data
             local_l_data = imu_dict["IMU_THIGH_LEFT"]
-            self.data_to_save['imu_L'][start_index, :] = local_l_data
+            log_imu_L[start_index, :] = local_l_data
             local_r_data = imu_dict["IMU_THIGH_RIGHT"]
-            self.data_to_save['imu_R'][start_index, :] = local_r_data
+            log_imu_R[start_index, :] = local_r_data
 
             # 3. Mirror the left data to the right side
             p_data_reflected = local_p_data.copy()
@@ -180,8 +192,10 @@ class Controller:
             l_data_reflected[5] *= -1
             
             # 4. Prepare the model input data
-            right_data = np.hstack((local_r_data, np.array([current_pos_R])))
-            left_data = np.hstack((l_data_reflected, np.array([current_pos_L])))
+            right_data[:6] = local_r_data
+            right_data[6] = current_pos_R
+            left_data[:6] = l_data_reflected
+            left_data[6] = current_pos_L
 
             right_data_norm = (right_data - self.input_mean) / self.input_std
             left_data_norm = (left_data - self.input_mean) / self.input_std
@@ -197,40 +211,77 @@ class Controller:
                 input_stream_data[0, :, -1] = right_data # Make sure not to put normalized data here
                 input_stream_data[1, :, -1] = left_data
 
-            # When it's time to update, send data for both sides to the worker
-                update_freq_gc = 2
-                peak_indices_L, _ = find_peaks(-np.array(self.data_to_save['mtr_pos_L']), height=None, distance=15, prominence=10)
-                peak_indices_R, _ = find_peaks(-np.array(self.data_to_save['mtr_pos_R']), height=None, distance=15, prominence=10)
-                buffer_start_abs = start_index - len(input_stream_data[0, 0, :]) # This is the start index of input_stream_data
+                # --- REVISED ADAPTATION TRIGGER LOGIC ---
+                update_freq_gc = 2 # Number of gait cycles for each adaptation update
+                
+                # Optimized peak detection on recent data
+                search_window = 500 # Search in the last 5 seconds
+                search_start_idx = max(0, start_index - search_window)
+                recent_pos_L = self.data_to_save['mtr_pos_L'][search_start_idx:start_index]
+                recent_pos_R = self.data_to_save['mtr_pos_R'][search_start_idx:start_index]
 
-                # Use only the data between the first and last peaks
-                if len(peak_indices_R) >= (gc_idx_R + update_freq_gc + 1): # at least 3 gait cycles needed
-                    print(buffer_start_abs, start_index, len(input_stream_data[0, 0, :]))
-                    gc_idx_R = gc_idx_R + update_freq_gc
-                    print(f"gc progress R: {gc_idx_R}")
-                    start_idx_few_cycles_R = peak_indices_R[-(update_freq_gc+1)] - buffer_start_abs
-                    end_idx_few_cycles_R = peak_indices_R[-1] - buffer_start_abs
-                    input_stream_data_R = input_stream_data[0, :, start_idx_few_cycles_R:end_idx_few_cycles_R] # Shape: (time, input_size)
-                    self.online_adaptator.trigger_finetuning('R', input_stream_data_R.T.copy())
+                peak_indices_L, _ = find_peaks(-recent_pos_L, height=None, distance=15, prominence=10)
+                peak_indices_L += search_start_idx
+                peak_indices_R, _ = find_peaks(-recent_pos_R, height=None, distance=15, prominence=10)
+                peak_indices_R += search_start_idx
+                
+                buffer_start_abs = start_index - len(input_stream_data[0, 0, :])
 
-                if len(peak_indices_L) >= (gc_idx_L + update_freq_gc + 1): # at least 3 gait cycles needed
-                    gc_idx_L = gc_idx_L + update_freq_gc
-                    print(f"gc progress L: {gc_idx_L}")
-                    start_idx_few_cycles_L = peak_indices_L[-(update_freq_gc+1)] - buffer_start_abs
-                    end_idx_few_cycles_L = peak_indices_L[-1] - buffer_start_abs
-                    input_stream_data_L = input_stream_data[1, :, start_idx_few_cycles_L:end_idx_few_cycles_L] # Shape: (time, input_size)
-                    self.online_adaptator.trigger_finetuning('L', input_stream_data_L.T.copy())
+                # Right side adaptation trigger
+                if len(peak_indices_R) > 0:
+                    # Find where our last used peak is in the current list of peaks
+                    start_peak_list_idx = np.searchsorted(peak_indices_R, self.last_used_peak_idx_R, side='left')
+                    
+                    # Check if there are enough new peaks for an update (2 gait cycles = 2 new peaks after the start)
+                    if (len(peak_indices_R) - start_peak_list_idx) > update_freq_gc:
+                        # Define the window of peaks for this update
+                        end_peak_list_idx = start_peak_list_idx + update_freq_gc
+                        
+                        # Get the absolute start and end indices for the data slice
+                        start_idx_abs = peak_indices_R[start_peak_list_idx]
+                        end_idx_abs = peak_indices_R[end_peak_list_idx]
 
+                        # Slice the data from the input stream buffer
+                        start_idx_rel = start_idx_abs - buffer_start_abs
+                        end_idx_rel = end_idx_abs - buffer_start_abs
+                        input_stream_data_R = input_stream_data[0, :, start_idx_rel:end_idx_rel]
+                        
+                        self.online_adaptator.trigger_finetuning('R', input_stream_data_R.T.copy())
+                        # print(f"Triggering R adaptation from index {start_idx_abs} to {end_idx_abs}")
+
+                        # Update the last used peak to the end of the current window
+                        self.last_used_peak_idx_R = end_idx_abs
+
+                # Left side adaptation trigger (identical logic)
+                if len(peak_indices_L) > 0:
+                    start_peak_list_idx = np.searchsorted(peak_indices_L, self.last_used_peak_idx_L, side='left')
+                    
+                    if (len(peak_indices_L) - start_peak_list_idx) > update_freq_gc:
+                        end_peak_list_idx = start_peak_list_idx + update_freq_gc
+                        
+                        start_idx_abs = peak_indices_L[start_peak_list_idx]
+                        end_idx_abs = peak_indices_L[end_peak_list_idx]
+
+                        start_idx_rel = start_idx_abs - buffer_start_abs
+                        end_idx_rel = end_idx_abs - buffer_start_abs
+                        input_stream_data_L = input_stream_data[1, :, start_idx_rel:end_idx_rel]
+                        
+                        self.online_adaptator.trigger_finetuning('L', input_stream_data_L.T.copy())
+                        # print(f"Triggering L adaptation from index {start_idx_abs} to {end_idx_abs}")
+                        
+                        self.last_used_peak_idx_L = end_idx_abs
             # Check for new weights from the adaptation worker
             updated_params = self.online_adaptator.get_updated_weights()
             if updated_params:
-                side, weights, biases = updated_params                
+                side, update_time, weights, biases = updated_params                
                 if side == 'R':
                     self.linear_weights_R = weights
                     self.linear_biases_R = biases
+                    update_time_R = update_time
                 elif side == 'L':
                     self.linear_weights_L = weights
                     self.linear_biases_L = biases
+                    update_time_L = update_time
 
             # 5. TensorRT inference & Apply linear layer weights and biases
             self.input_q.put((model_input_arr[0, :, :].copy(), model_input_arr[1, :, :].copy()))
@@ -239,7 +290,7 @@ class Controller:
                 last_model_output_r, last_model_output_l = model_output_r_val, model_output_l_val
             except mp.queues.Empty:
                 model_output_r_val, model_output_l_val = last_model_output_r, last_model_output_l
-
+            
             # Apply linear layer weights and biases
             model_output_r_val = np.dot(model_output_r_val.flatten(), self.linear_weights_R.T)
             model_output_r_val += self.linear_biases_R
@@ -253,7 +304,7 @@ class Controller:
 
             gait_phase_R = cartesian_to_percentage(model_output_r_denorm)
             gait_phase_L = cartesian_to_percentage(model_output_l_denorm)
-            
+
             delayed_gait_phase_R = (gait_phase_R - self.Exo.delay_factor) % 100
             delayed_gait_phase_L = (gait_phase_L - self.Exo.delay_factor) % 100
 
@@ -279,11 +330,11 @@ class Controller:
             self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, motor_cmd_val_R)
 
             # 8. Stack the data (that will be saved after the trial)
-            self.data_to_save['mtr_cmd_L'][start_index] = motor_cmd_val_L
-            self.data_to_save['mtr_cmd_R'][start_index] = motor_cmd_val_R
+            log_mtr_cmd_L[start_index] = motor_cmd_val_L
+            log_mtr_cmd_R[start_index] = motor_cmd_val_R
 
-            self.data_to_save['gait_phase_L'][start_index] = gait_phase_L
-            self.data_to_save['gait_phase_R'][start_index] = gait_phase_R
+            log_gait_phase_L[start_index] = gait_phase_L
+            log_gait_phase_R[start_index] = gait_phase_R
 
             # GPIO 펄스 로직 추가
             current_time = time.time() - start_time
@@ -315,7 +366,7 @@ class Controller:
                 print("Second pulse ended")
 
             # GPIO 상태 로깅 (100Hz로)
-            self.data_to_save['gpio_output'][start_index] = self.GPIO_control.get_gpio_output_state()
+            log_gpio_output[start_index] = self.GPIO_control.get_gpio_output_state()
 
             # 9. Loop time
             time_0 = time.time()
@@ -330,6 +381,8 @@ class Controller:
                 "gait_phase_R": gait_phase_R,
                 "cmd_R": motor_cmd_val_R,
                 "cmd_L": motor_cmd_val_L,
+                "update_time_R": update_time_R,
+                "update_time_L": update_time_L,
                 "loop_time_exceeded": loop_time_exceeded,
             }
             self.teleplot.sendBatchTelemetry(telemetry_data)
@@ -338,7 +391,7 @@ class Controller:
             if (time.time() - start_time) < (start_index / self.Exo.control_freq_Hz):
                 while (time.time() - start_time) < (start_index / self.Exo.control_freq_Hz):
                     pass
-            self.data_to_save['timestamp'][start_index] = time.time() - start_time
+            log_timestamp[start_index] = time.time() - start_time
             start_index += 1
 
     # Signal handler for graceful exit

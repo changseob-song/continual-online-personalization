@@ -146,7 +146,7 @@ def inference_worker(input_q, output_q, trt_engine_path,
     dummy_output_shape = (80, 100)
     for _ in range(10):
         _ = trt_inference(dummy_input_data, dummy_output_shape, context)
-    print("TensorRT engine warmed up.\nTrigger the trial to start...")
+    print("TensorRT engine warmed up.")
 
     while True:
         try:
