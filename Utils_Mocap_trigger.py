@@ -19,7 +19,7 @@ class Mocap_trigger:
 
     def wait_for_trigger(self):
         while self.trigger_msg != "exo on":
-            #print("[WAITING] Waiting for trigger message...")
+            print("[WAITING] Waiting for trigger message...")
             try:
                 # Receive echoed message from the server
                 self.trigger_msg = self.client.recv(1024).decode('utf-8')

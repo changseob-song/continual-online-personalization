@@ -3,6 +3,7 @@ import multiprocessing as mp
 import numpy as np
 
 from OnlineAdaptator import OnlineAdaptator
+from Utils_Mocap_trigger import Mocap_trigger
 from Utils_GPIO import GPIO_control
 from Utils_Teleplot import Teleplot
 from Utils import lowpass_filter, fast_roll, inference_worker, cleanup_can, save_data, cartesian_to_percentage, NumpyCompatUnpickler, causal_filter
@@ -35,11 +36,10 @@ class Controller:
             'timestamp': np.zeros(max_samples),
             'mtr_pos_L': np.zeros(max_samples), 'mtr_pos_R': np.zeros(max_samples),
             'mtr_vel_L': np.zeros(max_samples), 'mtr_vel_R': np.zeros(max_samples),
+            'imu_P': np.zeros((max_samples, 6)), 'imu_L': np.zeros((max_samples, 6)), 'imu_R': np.zeros((max_samples, 6)),
             'mtr_cmd_L': np.zeros(max_samples), 'mtr_cmd_R': np.zeros(max_samples),
             'gait_phase_L': np.zeros(max_samples), 'gait_phase_R': np.zeros(max_samples),
-            'imu_P': np.zeros((max_samples, 6)),  # PELVIS IMU data
-            'imu_L': np.zeros((max_samples, 6)),  # LEFT THIGH IMU data
-            'imu_R': np.zeros((max_samples, 6)),  # RIGHT THIGH IMU data
+            'incline': ['']*max_samples, 'speed': ['']*max_samples,
             'gpio_output': np.zeros(max_samples)  # GPIO output state
         }
 
@@ -53,13 +53,14 @@ class Controller:
         label_mean_path = os.path.join(base_model_path, 'label_mean.npy')
         label_std_path = os.path.join(base_model_path, 'label_std.npy')
 
-        self.input_mean = np.load(input_mean_path)
-        self.input_std = np.load(input_std_path)
-        self.label_mean = np.load(label_mean_path)
-        self.label_std = np.load(label_std_path)
+        self.input_mean = np.load(input_mean_path); self.input_std = np.load(input_std_path)
+        self.label_mean = np.load(label_mean_path); self.label_std = np.load(label_std_path)
         self.num_input_features = self.input_mean.shape[0]
 
         # Initialize the exoskeleton
+        if self.trigger_type == "mocap":
+            self.mocap_trigger = Mocap_trigger(server_ip="172.24.44.177", port_number=10)
+            self.mocap_trigger.start_client()
         self.GPIO_control = GPIO_control()
         self.Exo = Exo()
         
@@ -84,9 +85,6 @@ class Controller:
         self.linear_weights_L = self.linear_weights_R.copy()
         self.linear_biases_L = self.linear_biases_R.copy()
 
-        print(self.linear_weights_R)
-        print(self.linear_biases_R)
-
         # Initialize OnlineAdaptator
         self.online_adaptator = OnlineAdaptator(self.pt_model_path)
 
@@ -104,18 +102,13 @@ class Controller:
 
         current_pos_L, current_vel_L = 0.0, 0.0
         current_pos_R, current_vel_R = 0.0, 0.0
-        
-        local_p_data = np.zeros(6)
-        local_l_data = np.zeros(6)
-        local_r_data = np.zeros(6)
 
-        right_data = np.zeros(self.num_input_features)
-        left_data = np.zeros(self.num_input_features)
+        local_p_data = np.zeros(6); local_l_data = np.zeros(6); local_r_data = np.zeros(6)
 
-        last_model_output_r = np.zeros((80, 100), dtype=np.float32)
-        last_model_output_l = np.zeros((80, 100), dtype=np.float32)
-        model_output_r_val = last_model_output_r
-        model_output_l_val = last_model_output_l
+        right_data = np.zeros(self.num_input_features); left_data = np.zeros(self.num_input_features)
+
+        last_model_output_r = np.zeros((80, 100), dtype=np.float32); last_model_output_l = np.zeros((80, 100), dtype=np.float32)
+        model_output_r_val = last_model_output_r; model_output_l_val = last_model_output_l
 
         update_time_R, update_time_L = 0.0, 0.0
 
@@ -123,9 +116,10 @@ class Controller:
         log_timestamp = self.data_to_save['timestamp']
         log_mtr_pos_L, log_mtr_pos_R = self.data_to_save['mtr_pos_L'], self.data_to_save['mtr_pos_R']
         log_mtr_vel_L, log_mtr_vel_R = self.data_to_save['mtr_vel_L'], self.data_to_save['mtr_vel_R']
+        log_imu_P, log_imu_L, log_imu_R = self.data_to_save['imu_P'], self.data_to_save['imu_L'], self.data_to_save['imu_R']
         log_mtr_cmd_L, log_mtr_cmd_R = self.data_to_save['mtr_cmd_L'], self.data_to_save['mtr_cmd_R']
         log_gait_phase_L, log_gait_phase_R = self.data_to_save['gait_phase_L'], self.data_to_save['gait_phase_R']
-        log_imu_P, log_imu_L, log_imu_R = self.data_to_save['imu_P'], self.data_to_save['imu_L'], self.data_to_save['imu_R']
+        log_incline, log_speed = self.data_to_save['incline'], self.data_to_save['speed']
         log_gpio_output = self.data_to_save['gpio_output']
 
         # Start recording time
@@ -146,9 +140,10 @@ class Controller:
 
         # Main control loop
         while True:
-            loop_time_start = time.time()
 
             # 0. Check if the trial time has exceeded
+            start_time = time.time()
+
             if self.trigger_type == "mocap" and not logging_started:
                 self.mocap_trigger.wait_for_trigger()
                 print("Mocap trigger received - starting data logging")
@@ -158,21 +153,17 @@ class Controller:
                 start_time = time.time()
                 logging_started = True
 
-            if not logging_started:
-                continue
-
             # Get the task index
             task_idx = int((loop_index/self.Exo.control_freq_Hz - self.pulse_after_start)//self.task_interval)
             task_idx = max(0, task_idx)
-            incline, speed = self.task_stream[task_idx].split('-')
-            # print(f"Current task: Incline {incline}, Speed {speed}", end='\r')
+            current_incline, current_speed = self.task_stream[task_idx].split('-')
+            log_incline[loop_index] = current_incline; log_speed[loop_index] = current_speed
 
             # 1. Read the motor encoder values
             current_pos_L, current_vel_L = self.Exo.update_readings(self.Exo.CAN_id_L)
             current_pos_R, current_vel_R = self.Exo.update_readings(self.Exo.CAN_id_R)
 
-            current_pos_R *= -1
-            current_vel_R *= -1
+            current_pos_R *= -1; current_vel_R *= -1 # mirror the right side values (because of the motor mounting direction)
 
             log_mtr_pos_L[loop_index] = current_pos_L; log_mtr_pos_R[loop_index] = current_pos_R
             log_mtr_vel_L[loop_index] = current_vel_L; log_mtr_vel_R[loop_index] = current_vel_R
@@ -180,49 +171,37 @@ class Controller:
             # 2. Read the IMU values
             imu_dict = self.Exo.imus.read_IMUs()
 
-            local_p_data = imu_dict["IMU_PELVIS"]
-            log_imu_P[loop_index, :] = local_p_data
-            local_l_data = imu_dict["IMU_THIGH_LEFT"]
-            log_imu_L[loop_index, :] = local_l_data
-            local_r_data = imu_dict["IMU_THIGH_RIGHT"]
-            log_imu_R[loop_index, :] = local_r_data
+            local_p_data = imu_dict["IMU_PELVIS"]; local_l_data = imu_dict["IMU_THIGH_LEFT"]; local_r_data = imu_dict["IMU_THIGH_RIGHT"]
+            log_imu_P[loop_index, :] = local_p_data; log_imu_L[loop_index, :] = local_l_data; log_imu_R[loop_index, :] = local_r_data
 
             # 3. Mirror the left data to the right side
             p_data_reflected = local_p_data.copy()
-            p_data_reflected[1] *= -1
-            p_data_reflected[3] *= -1
-            p_data_reflected[5] *= -1
+            p_data_reflected[1] *= -1; p_data_reflected[3] *= -1; p_data_reflected[5] *= -1
 
             l_data_reflected = local_l_data.copy()
-            l_data_reflected[1] *= -1
-            l_data_reflected[3] *= -1
-            l_data_reflected[5] *= -1
+            l_data_reflected[1] *= -1; l_data_reflected[3] *= -1; l_data_reflected[5] *= -1
             
             # 4. Prepare the model input data
-            right_data[:6] = local_r_data
-            right_data[6] = current_pos_R
-            left_data[:6] = l_data_reflected
-            left_data[6] = current_pos_L
+            right_data[:6] = local_r_data; right_data[6] = current_pos_R
+            left_data[:6] = l_data_reflected; left_data[6] = current_pos_L
 
             right_data_norm = (right_data - self.input_mean) / self.input_std
             left_data_norm = (left_data - self.input_mean) / self.input_std
 
             model_input_arr = fast_roll(model_input_arr)
-            model_input_arr[0, :, -1] = right_data_norm
-            model_input_arr[1, :, -1] = left_data_norm
+            model_input_arr[0, :, -1] = right_data_norm; model_input_arr[1, :, -1] = left_data_norm
 
             # 4.1 Prepare the input data for online adaptation
             if first_pulse_sent:
 
                 input_stream_data = fast_roll(input_stream_data)
-                input_stream_data[0, :, -1] = right_data # Make sure not to put normalized data here
-                input_stream_data[1, :, -1] = left_data
+                input_stream_data[0, :, -1] = right_data; input_stream_data[1, :, -1] = left_data
 
                 # --- REVISED ADAPTATION TRIGGER LOGIC ---
                 update_freq_gc = 2 # Number of gait cycles for each adaptation update
                 
                 # Optimized peak detection on recent data
-                search_window = 500 # Search in the last 5 seconds
+                search_window = 600 # Search in the last 6 seconds
                 search_start_idx = max(0, loop_index - search_window)
                 recent_pos_L = self.data_to_save['mtr_pos_L'][search_start_idx:loop_index]
                 recent_pos_R = self.data_to_save['mtr_pos_R'][search_start_idx:loop_index]
@@ -238,18 +217,16 @@ class Controller:
                 if self.last_used_peak_idx_R not in peak_indices_R:
                     if len(peak_indices_R) > update_freq_gc:
                         # Get the absolute start and end indices for the data slice
-                        start_idx_abs = peak_indices_R[0]
-                        end_idx_abs = peak_indices_R[-1]
+                        start_idx_abs = peak_indices_R[0]; end_idx_abs = peak_indices_R[-1]
                         print('R', start_idx_abs, peak_indices_R[-2], end_idx_abs)
                         mid_peak_idx_rel = peak_indices_R[1:-1] - start_idx_abs # This is relative about start_idx_abs
+                        incline_stream = log_incline[start_idx_abs:end_idx_abs]; speed_stream = log_speed[start_idx_abs:end_idx_abs]
 
                         # Slice the data from the input stream buffer
-                        start_idx_rel = start_idx_abs - buffer_start_abs
-                        end_idx_rel = end_idx_abs - buffer_start_abs
+                        start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
                         input_stream_data_R = input_stream_data[0, :, start_idx_rel:end_idx_rel]
-                        
-                        self.online_adaptator.trigger_finetuning('R', incline, speed, input_stream_data_R.T.copy(), mid_peak_idx_rel)
-                        # print(f"Triggering R adaptation from index {start_idx_abs} to {end_idx_abs}")
+
+                        self.online_adaptator.trigger_finetuning('R', current_incline, current_speed, input_stream_data_R.T.copy(), mid_peak_idx_rel)
 
                         # Update the last used peak to the end of the current window
                         self.last_used_peak_idx_R = end_idx_abs
@@ -258,17 +235,15 @@ class Controller:
                 if self.last_used_peak_idx_L not in peak_indices_L:
                     if len(peak_indices_L) > update_freq_gc:
                         # Get the absolute start and end indices for the data slice
-                        start_idx_abs = peak_indices_L[0]
-                        end_idx_abs = peak_indices_L[-1]
+                        start_idx_abs = peak_indices_L[0]; end_idx_abs = peak_indices_L[-1]
                         mid_peak_idx_rel = peak_indices_L[1:-1] - start_idx_abs # This is relative about start_idx_abs
-                        
+                        incline_stream = log_incline[start_idx_abs:end_idx_abs]; speed_stream = log_speed[start_idx_abs:end_idx_abs]
+
                         # Slice the data from the input stream buffer
-                        start_idx_rel = start_idx_abs - buffer_start_abs
-                        end_idx_rel = end_idx_abs - buffer_start_abs
+                        start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
                         input_stream_data_L = input_stream_data[1, :, start_idx_rel:end_idx_rel]
-                        
-                        self.online_adaptator.trigger_finetuning('L', incline, speed, input_stream_data_L.T.copy(), mid_peak_idx_rel)
-                        # print(f"Triggering L adaptation from index {start_idx_abs} to {end_idx_abs}")
+
+                        self.online_adaptator.trigger_finetuning('L', current_incline, current_speed, input_stream_data_L.T.copy(), mid_peak_idx_rel)
 
                         # Update the last used peak to the end of the current window
                         self.last_used_peak_idx_L = end_idx_abs
@@ -312,8 +287,8 @@ class Controller:
             delayed_gait_phase_L = (gait_phase_L - self.Exo.delay_factor) % 100
 
             # 7. Send the torque command to the motors
-            motor_cmd_val_L = self.torque_profile[incline][speed][int(delayed_gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor
-            motor_cmd_val_R = self.torque_profile[incline][speed][int(delayed_gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor
+            motor_cmd_val_L = self.torque_profile[current_incline][current_speed][int(delayed_gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor
+            motor_cmd_val_R = self.torque_profile[current_incline][current_speed][int(delayed_gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor
 
             motor_cmd_array = fast_roll(motor_cmd_array)
             motor_cmd_array[:, -1] = [motor_cmd_val_R, motor_cmd_val_L]    
@@ -377,15 +352,13 @@ class Controller:
             telemetry_data = {
                 "pos_R": current_pos_R,
                 "pos_L": current_pos_L,
-                "gait_phase_L": gait_phase_L,
-                "gait_phase_R": gait_phase_R,
                 "cmd_R": motor_cmd_val_R,
                 "cmd_L": motor_cmd_val_L,
+                "gait_phase_L": gait_phase_L,
+                "gait_phase_R": gait_phase_R,
                 "update_time_R": update_time_R,
                 "update_time_L": update_time_L,
                 "loop_time_exceeded": loop_time_exceeded,
-                "incline": incline,
-                "speed": speed
             }
             self.teleplot.sendBatchTelemetry(telemetry_data)
 

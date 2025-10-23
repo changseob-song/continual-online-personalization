@@ -12,7 +12,7 @@ class Exo:
         self.frame_length = 100  # Window size (in frames)
 
         # biotorque parameters
-        self.scale_factor = 0.20
+        self.scale_factor = 0.15
         self.delay_factor = -20  # Number of frames to delay the torque command
 
         # note: motors zero themselves when actuation.Motors() runs
@@ -34,5 +34,6 @@ class Exo:
     def update_readings(self, CAN_id):
         mtr_pos = self.mtr_comms.get_position(CAN_id, degrees=True)
         mtr_vel = self.mtr_comms.get_velocity(CAN_id, degrees=True)
+        mtr_torque = self.mtr_comms.get_torque(CAN_id)
 
         return mtr_pos, mtr_vel

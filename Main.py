@@ -12,8 +12,8 @@ if __name__ == '__main__':
 
     # Trial setting
     trial_name = 'debug'
-    pulse_after_start = 2 # seconds
-    trial_dur_sec = 120  # seconds
+    pulse_after_start = 0 # seconds
+    trial_dur_sec = 60  # seconds
     exo_ON = True
 
     # Trigger setting
@@ -28,7 +28,7 @@ if __name__ == '__main__':
                    'LG-0p6mps', 'LG-0p8mps',
                    'RD_10deg-0p8mps', 'RD_10deg-1p0mps',
                    'LG-0p5mps', 'LG-0p7mps']
-    task_interval = 10 # seconds
+    task_interval = 30 # seconds
 
     # Model path
     # tcn_only
@@ -45,10 +45,6 @@ if __name__ == '__main__':
                             body_mass_kg,
                             task_stream, task_interval
                             )
-    
-    if controller.trigger_type == "mocap":
-        mocap_trigger = Mocap_trigger()
-        mocap_trigger.start_client()
 
     mp.set_start_method('spawn', force=True)
 

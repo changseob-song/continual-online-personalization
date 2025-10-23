@@ -78,7 +78,7 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config):
     inclinations_all = ['RD_10deg', 'RD_7p5deg', 'RD_5deg', 'RD_2p5deg', 'LG', 'RA_2p5deg', 'RA_5deg', 'RA_7p5deg', 'RA_10deg']
     speeds_all = ['0p2mps', '0p3mps', '0p4mps', '0p5mps', '0p6mps', '0p7mps', '0p8mps', '0p9mps', '1p0mps', '1p1mps', '1p2mps', '1p3mps', '1p4mps']
     bin_state = {inc: {spd: 0 for spd in speeds_all} for inc in inclinations_all}
-    st_replay_buffer = {inc: {spd: {gc: None for gc in range(2)} for spd in speeds_all} for inc in inclinations_all}
+    train_loader = {inc: {spd: None for spd in speeds_all} for inc in inclinations_all}
 
     # Main loop to wait for data and fine-tune
     while True:
@@ -104,11 +104,27 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config):
 
             train_indices = list(range(len(dataset)))
             subset = Subset(dataset, train_indices)
+
+            bin_state[incline][speed] = 1
             # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
-            train_loader = DataLoader(subset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
+            train_loader[incline][speed] = DataLoader(subset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
+
+            train_loader_combined_list = []
+            # Aggregate all train loaders into a single list
+            for inc in inclinations_all:
+                for spd in speeds_all:
+                    if bin_state[inc][spd] == 1:
+                        # if side == 'R':
+                        #     print(f"Adaptation Worker: Including data from {inc}-{spd} for training. {len(train_loader[inc][spd].dataset)} samples.")
+                        train_loader_combined_list.append(train_loader[inc][spd])
+
+            train_loader_combined = torch.utils.data.ConcatDataset([loader.dataset for loader in train_loader_combined_list])
+            if side == 'R':
+                print(f"Adaptation Worker: Total training samples combined: {len(train_loader_combined)}")
+            train_loader_combined = DataLoader(train_loader_combined, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
 
             # Training loop
-            for input_batch, label_batch in train_loader:
+            for input_batch, label_batch in train_loader_combined:
                 input_batch = input_batch.to(device)
                 label_batch = label_batch.to(device)
                 
