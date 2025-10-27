@@ -15,9 +15,9 @@ def adaptation_worker_warmup(model, optimizer, criterion, device, model_path, in
         dummy_input_data = np.zeros((300, hyperparam_config['input_size']), dtype=np.float32)
         
         # Simulate peaks for gait cycle detection in LoadData
-        dummy_input_data[50, 6] = -100
-        dummy_input_data[150, 6] = -100
-        dummy_input_data[250, 6] = -100
+        dummy_input_data[50, 5] = -100
+        dummy_input_data[150, 5] = -100
+        dummy_input_data[250, 5] = -100
 
         # Use one of the models (e.g., model_R) for the warm-up
         warmup_dataset = LoadData('R', 'LG', '1p0mps', dummy_input_data, np.array([10]), model_path, input_mean, input_std, label_mean, label_std)
@@ -38,8 +38,37 @@ def adaptation_worker_warmup(model, optimizer, criterion, device, model_path, in
     except Exception as e:
         print(f"Adaptation Worker: Error during warm-up: {e}")
 
+def upsampling(data, target_length):
+    """
+    Upsample a 1D numpy array to the desired target length using linear interpolation.
+    """
+    original_length = len(data)
+    original_indices = np.linspace(0, original_length - 1, original_length)
+    new_indices = np.linspace(0, original_length - 1, target_length)
 
-def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config):
+    return np.interp(new_indices, original_indices, data)
+
+def upsampling_2d(data, target_length):
+    """
+    Upsample a 2D numpy array to the desired target length using linear interpolation.
+    data: numpy array of shape (n_features, n_samples)
+    target_length: desired length of each segment after upsampling
+    """
+    upsampled_data = np.zeros((data.shape[0], target_length))
+    for i in range(data.shape[0]):
+        upsampled_data[i, :] = upsampling(data[i, :], target_length)
+
+    return upsampled_data  # (target_length, n_features)
+
+def interpolate_two_cycles(cycle1, cycle2, weight):
+    # cycle1 and cycle2 shape: (n_features, n_samples)
+    interpolated_len = cycle1.shape[1]*weight + cycle2.shape[1]*(1-weight)
+    cycle1_upsampled = upsampling_2d(cycle1, int(interpolated_len))
+    cycle2_upsampled = upsampling_2d(cycle2, int(interpolated_len))
+    interpolated_cycle = cycle1_upsampled * weight + cycle2_upsampled * (1 - weight)
+    return interpolated_cycle
+
+def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, replay_buffer_ON=False):
     """
     This worker process handles the fine-tuning of the model.
     All PyTorch and CUDA initializations happen inside this function.
@@ -78,6 +107,7 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config):
     inclinations_all = ['RD_10deg', 'RD_7p5deg', 'RD_5deg', 'RD_2p5deg', 'LG', 'RA_2p5deg', 'RA_5deg', 'RA_7p5deg', 'RA_10deg']
     speeds_all = ['0p2mps', '0p3mps', '0p4mps', '0p5mps', '0p6mps', '0p7mps', '0p8mps', '0p9mps', '1p0mps', '1p1mps', '1p2mps', '1p3mps', '1p4mps']
     bin_state = {inc: {spd: 0 for spd in speeds_all} for inc in inclinations_all}
+    input_stream = {inc: {spd: None for spd in speeds_all} for inc in inclinations_all}
     train_loader = {inc: {spd: None for spd in speeds_all} for inc in inclinations_all}
 
     # Main loop to wait for data and fine-tune
@@ -85,17 +115,18 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config):
         try:
             # Wait for data from the main controller
             side, incline, speed, input_data, mid_peak_idx = input_q.get() # input data shape : (length, channel num)
-
-            if side is None: # Shutdown signal
-                print("Adaptation Worker: Shutdown signal received.")
-                break
             
             start_time = time.time()
 
             # Determine which model and optimizer to use
             model = model_R if side == 'R' else model_L
             optimizer = optimizer_R if side == 'R' else optimizer_L
-            
+
+            print(input_data.shape)
+            # if bin_state[incline][speed] == 1:
+            #     input_data = interpolate_two_cycles(input_data.T, input_stream[incline][speed].T, weight=0.5)
+            #     input_data = input_data.T  # Transpose back to (length, channel num)
+
             # Create dataset
             dataset = LoadData(side, incline, speed, input_data, mid_peak_idx, model_path, input_mean, input_std, label_mean, label_std)
 
@@ -106,22 +137,26 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config):
             subset = Subset(dataset, train_indices)
 
             bin_state[incline][speed] = 1
+            input_stream[incline][speed] = input_data
             # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
             train_loader[incline][speed] = DataLoader(subset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
 
-            train_loader_combined_list = []
-            # Aggregate all train loaders into a single list
-            for inc in inclinations_all:
-                for spd in speeds_all:
-                    if bin_state[inc][spd] == 1:
-                        # if side == 'R':
-                        #     print(f"Adaptation Worker: Including data from {inc}-{spd} for training. {len(train_loader[inc][spd].dataset)} samples.")
-                        train_loader_combined_list.append(train_loader[inc][spd])
+            if replay_buffer_ON:
+                train_loader_combined_list = []
+                # Aggregate all train loaders into a single list
+                for inc in inclinations_all:
+                    for spd in speeds_all:
+                        if bin_state[inc][spd] == 1:
+                            # if side == 'R':
+                            #     print(f"Adaptation Worker: Including data from {inc}-{spd} for training. {len(train_loader[inc][spd].dataset)} samples.")
+                            train_loader_combined_list.append(train_loader[inc][spd])
 
-            train_loader_combined = torch.utils.data.ConcatDataset([loader.dataset for loader in train_loader_combined_list])
-            if side == 'R':
-                print(f"Adaptation Worker: Total training samples combined: {len(train_loader_combined)}")
-            train_loader_combined = DataLoader(train_loader_combined, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
+                train_loader_combined = torch.utils.data.ConcatDataset([loader.dataset for loader in train_loader_combined_list])
+                if side == 'R':
+                    print(f"Adaptation Worker: Total training samples combined: {len(train_loader_combined)}")
+                train_loader_combined = DataLoader(train_loader_combined, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
+            else:
+                train_loader_combined = train_loader[incline][speed]
 
             # Training loop
             for input_batch, label_batch in train_loader_combined:
@@ -152,7 +187,7 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config):
 
 
 class OnlineAdaptator():
-    def __init__(self, model_path):
+    def __init__(self, model_path, replay_buffer_ON=False):
         self.model_path = model_path
         self.input_q = mp.Queue()
         self.output_q = mp.Queue()
@@ -160,7 +195,7 @@ class OnlineAdaptator():
         # Start the new standalone worker process
         self.adaptation_process = mp.Process(
             target=adaptation_worker_process, 
-            args=(self.input_q, self.output_q, self.model_path, hyperparam_config)
+            args=(self.input_q, self.output_q, self.model_path, hyperparam_config, replay_buffer_ON)
         )
         self.adaptation_process.start()
 

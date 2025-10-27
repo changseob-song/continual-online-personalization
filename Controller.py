@@ -12,8 +12,8 @@ from scipy.signal import find_peaks
 
 class Controller:
     def __init__(self, pt_model_path, trt_engine_path, torque_profile_path,
-                 trigger_type, trial_name, pulse_after_start, trial_dur_sec, body_mass_kg,
-                 task_stream, task_interval):
+                 trigger_type, trial_name, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
+                 task_stream, task_interval, replay_buffer_ON):
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
         self.trt_engine_path = trt_engine_path
@@ -22,8 +22,10 @@ class Controller:
         self.body_mass_kg = body_mass_kg
         self.pulse_after_start = pulse_after_start
         self.trial_dur_sec = trial_dur_sec
+        self.adjustment_duration = adjustment_duration
         self.task_stream = task_stream
         self.task_interval = task_interval
+        self.replay_buffer_ON = replay_buffer_ON
         self.last_used_peak_idx_L = 0
         self.last_used_peak_idx_R = 0
 
@@ -86,9 +88,9 @@ class Controller:
         self.linear_biases_L = self.linear_biases_R.copy()
 
         # Initialize OnlineAdaptator
-        self.online_adaptator = OnlineAdaptator(self.pt_model_path)
+        self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.replay_buffer_ON)
 
-    def run_loop(self, Exo_ON=False):
+    def run_loop(self, Exo_ON=False, adaptation_ON=False):
 
         # Setting for the exiting process
         atexit.register(lambda: (cleanup_can(self.Exo.bus, self.Exo.notifier), self.GPIO_control.safe_gpio_cleanup()))
@@ -102,6 +104,8 @@ class Controller:
 
         current_pos_L, current_vel_L = 0.0, 0.0
         current_pos_R, current_vel_R = 0.0, 0.0
+        gait_phase_R_prev = 0.0
+        gait_phase_L_prev = 0.0
 
         local_p_data = np.zeros(6); local_l_data = np.zeros(6); local_r_data = np.zeros(6)
 
@@ -119,11 +123,11 @@ class Controller:
         log_imu_P, log_imu_L, log_imu_R = self.data_to_save['imu_P'], self.data_to_save['imu_L'], self.data_to_save['imu_R']
         log_mtr_cmd_L, log_mtr_cmd_R = self.data_to_save['mtr_cmd_L'], self.data_to_save['mtr_cmd_R']
         log_gait_phase_L, log_gait_phase_R = self.data_to_save['gait_phase_L'], self.data_to_save['gait_phase_R']
+        
         log_incline, log_speed = self.data_to_save['incline'], self.data_to_save['speed']
         log_gpio_output = self.data_to_save['gpio_output']
 
         # Start recording time
-        logging_started = False
         first_pulse_sent = False
         first_pulse_end_time = None
         second_pulse_sent = False
@@ -133,25 +137,18 @@ class Controller:
         # Wait for the trigger to start the trial
         if self.trigger_type == "mocap":
             print("Wait for the tensorrt to warm up...\n")
+            self.mocap_trigger.wait_for_trigger()
+            print("Mocap trigger received - starting data logging")
+            
         elif self.trigger_type == "typing":
             input_trigger = input("Wait for the tensorrt to warm up...\n")
             if input_trigger == "":
                 print("Trial started")
 
+        start_time = time.time()
+
         # Main control loop
         while True:
-
-            # 0. Check if the trial time has exceeded
-            start_time = time.time()
-
-            if self.trigger_type == "mocap" and not logging_started:
-                self.mocap_trigger.wait_for_trigger()
-                print("Mocap trigger received - starting data logging")
-                start_time = time.time()
-                logging_started = True
-            elif self.trigger_type == "typing" and not logging_started:
-                start_time = time.time()
-                logging_started = True
 
             # Get the task index
             task_idx = int((loop_index/self.Exo.control_freq_Hz - self.pulse_after_start)//self.task_interval)
@@ -182,8 +179,8 @@ class Controller:
             l_data_reflected[1] *= -1; l_data_reflected[3] *= -1; l_data_reflected[5] *= -1
             
             # 4. Prepare the model input data
-            right_data[:6] = local_r_data; right_data[6] = current_pos_R
-            left_data[:6] = l_data_reflected; left_data[6] = current_pos_L
+            right_data[:6] = local_r_data; #right_data[6] = current_pos_R
+            left_data[:6] = l_data_reflected; #left_data[6] = current_pos_L
 
             right_data_norm = (right_data - self.input_mean) / self.input_std
             left_data_norm = (left_data - self.input_mean) / self.input_std
@@ -192,7 +189,7 @@ class Controller:
             model_input_arr[0, :, -1] = right_data_norm; model_input_arr[1, :, -1] = left_data_norm
 
             # 4.1 Prepare the input data for online adaptation
-            if first_pulse_sent:
+            if first_pulse_sent and adaptation_ON:
 
                 input_stream_data = fast_roll(input_stream_data)
                 input_stream_data[0, :, -1] = right_data; input_stream_data[1, :, -1] = left_data
@@ -283,19 +280,30 @@ class Controller:
             gait_phase_R = cartesian_to_percentage(model_output_r_denorm)
             gait_phase_L = cartesian_to_percentage(model_output_l_denorm)
 
+            # Store previous gait phase if decreasing
+            if (gait_phase_R < gait_phase_R_prev) and (gait_phase_R_prev < 90): gait_phase_R = gait_phase_R_prev
+            else: gait_phase_R_prev = gait_phase_R
+            if (gait_phase_L < gait_phase_L_prev) and (gait_phase_L_prev < 90): gait_phase_L = gait_phase_L_prev
+            else: gait_phase_L_prev = gait_phase_L
+
             delayed_gait_phase_R = (gait_phase_R - self.Exo.delay_factor) % 100
             delayed_gait_phase_L = (gait_phase_L - self.Exo.delay_factor) % 100
 
+            if loop_index / self.Exo.control_freq_Hz >= self.pulse_after_start:
+                gradual_torque_scale = min(1.0, ((loop_index / self.Exo.control_freq_Hz) - self.pulse_after_start) / self.adjustment_duration)
+            else:
+                gradual_torque_scale = 0.0
+
             # 7. Send the torque command to the motors
-            motor_cmd_val_L = self.torque_profile[current_incline][current_speed][int(delayed_gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor
-            motor_cmd_val_R = self.torque_profile[current_incline][current_speed][int(delayed_gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor
+            motor_cmd_val_L = self.torque_profile[current_incline][current_speed][int(delayed_gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale
+            motor_cmd_val_R = self.torque_profile[current_incline][current_speed][int(delayed_gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale
 
             motor_cmd_array = fast_roll(motor_cmd_array)
             motor_cmd_array[:, -1] = [motor_cmd_val_R, motor_cmd_val_L]    
 
             # 8. Filter the torque command
-            motor_cmd_val_L = causal_filter(motor_cmd_array[1, :], tau=0.05)[-1]
-            motor_cmd_val_R = causal_filter(motor_cmd_array[0, :], tau=0.05)[-1]
+            # motor_cmd_val_L = causal_filter(motor_cmd_array[1, :], tau=0.05)[-1]
+            # motor_cmd_val_R = causal_filter(motor_cmd_array[0, :], tau=0.05)[-1]
 
             if Exo_ON == False: motor_cmd_val_L, motor_cmd_val_R = 0.0, 0.0 # use this for Exo off condition
 
@@ -304,8 +312,8 @@ class Controller:
             if motor_cmd_val_L < -10 or motor_cmd_val_R < -10:
                 motor_cmd_val_L, motor_cmd_val_R = -10, -10
 
-            self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_L, -motor_cmd_val_L) # Negative sign because the motor is mounted in reverse direction
-            self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, motor_cmd_val_R)
+            self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_L, motor_cmd_val_L) 
+            self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, -motor_cmd_val_R) # Negative sign because the motor is mounted in reverse direction
 
             # 8. Stack the data (that will be saved after the trial)
             log_mtr_cmd_L[loop_index] = motor_cmd_val_L
@@ -342,6 +350,8 @@ class Controller:
                 second_pulse_end_time = None
                 print("Second pulse ended")
 
+                break # Exit the loop after the second pulse ends
+
             # GPIO output logging
             log_gpio_output[loop_index] = self.GPIO_control.get_gpio_output_state()
 
@@ -352,10 +362,12 @@ class Controller:
             telemetry_data = {
                 "pos_R": current_pos_R,
                 "pos_L": current_pos_L,
+                "vel_R": current_vel_R,
+                "vel_L": current_vel_L,
                 "cmd_R": motor_cmd_val_R,
                 "cmd_L": motor_cmd_val_L,
-                "gait_phase_L": gait_phase_L,
                 "gait_phase_R": gait_phase_R,
+                "gait_phase_L": gait_phase_L,
                 "update_time_R": update_time_R,
                 "update_time_L": update_time_L,
                 "loop_time_exceeded": loop_time_exceeded,

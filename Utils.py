@@ -30,7 +30,7 @@ def causal_filter(data, tau=0.1, dt=0.01, y0=None, return_last=False):
 
     C, T = x.shape
 
-    alpha = dt / float(tau)
+    alpha = dt / float(tau) # alphas is about how much weight we give to the new measurement
     alpha = float(np.clip(alpha, 0.0, 1.0))
 
     y = np.empty_like(x)

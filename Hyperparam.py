@@ -22,7 +22,7 @@ sweep_config = {
 hyperparam_config = {
     'wandb_project_name': 'online_adaptation-GPE',
     'wandb_session_name': 'hyperparam_optimized-all_subjects',  # sweep-, 2. SK, 3. AB+SK
-    'input_size': 7, # 12 for IMU (right, left), 2 for hip angle and velocity
+    'input_size': 6, # 12 for IMU (right, left), 2 for hip angle and velocity
     'output_size': 2, # 2 for polar coordinates (x, y) of gait cycle
     'architecture': 'TCN',
     

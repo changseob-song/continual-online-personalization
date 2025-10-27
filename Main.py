@@ -11,10 +11,13 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting
-    trial_name = 'debug'
+    trial_name = 'online_test_5-adaptation_on'
     pulse_after_start = 0 # seconds
-    trial_dur_sec = 60  # seconds
+    trial_dur_sec = 90  # seconds
+    adjustment_duration = 30  # seconds
     exo_ON = True
+    adaptation_ON = True
+    replay_buffer_ON = False
 
     # Trigger setting
     trigger_type = "typing"  # "mocap" or "typing"
@@ -23,7 +26,7 @@ if __name__ == '__main__':
     body_mass_kg = 72  # kg
 
     # Task stream
-    task_stream = ['LG-1p0mps', 'LG-0p4mps',
+    task_stream = ['LG-1p0mps', 'LG-1p0mps', 'LG-1p0mps',
                    'RA_5deg-0p5mps', 'RA_5deg-0p8mps',
                    'LG-0p6mps', 'LG-0p8mps',
                    'RD_10deg-0p8mps', 'RD_10deg-1p0mps',
@@ -32,20 +35,21 @@ if __name__ == '__main__':
 
     # Model path
     # tcn_only
-    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/hyperparam_optimized-input_modality_7/hyperparam_optimized-input_modality_7_tcn.trt'
+    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/hyperparam_optimized-input_modality_6/hyperparam_optimized-input_modality_6_tcn.trt'
     # entire model (TCN + linear layer)
-    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/hyperparam_optimized-input_modality_7/hyperparam_optimized-input_modality_7.pt'
+    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/hyperparam_optimized-input_modality_6/hyperparam_optimized-input_modality_6.pt'
     # torque profile path
-    torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE/avg_biological_hip_torque.pkl'
+    torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE/torque_splines.pkl'
 
     # Initialize Control loop class
     controller = Controller(pt_model_path, trt_engine_path, torque_profile_path,
                             trigger_type, trial_name,
-                            pulse_after_start, trial_dur_sec,
+                            pulse_after_start, trial_dur_sec, adjustment_duration,
                             body_mass_kg,
-                            task_stream, task_interval
+                            task_stream, task_interval,
+                            replay_buffer_ON
                             )
 
     mp.set_start_method('spawn', force=True)
 
-    controller.run_loop(exo_ON)
+    controller.run_loop(exo_ON, adaptation_ON)
