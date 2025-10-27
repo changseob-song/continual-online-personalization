@@ -13,7 +13,7 @@ class Exo:
 
         # biotorque parameters
         self.scale_factor = 0.2
-        self.delay_factor = 43  # Number of frames to delay the torque command
+        self.delay_factor = 0  # Number of frames to delay the torque command
 
         # note: motors zero themselves when actuation.Motors() runs
         _ = input("Press Enter to initialize motors: ")

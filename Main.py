@@ -14,7 +14,7 @@ if __name__ == '__main__':
     trial_name = 'online_test_5-adaptation_on'
     pulse_after_start = 0 # seconds
     trial_dur_sec = 90  # seconds
-    adjustment_duration = 30  # seconds
+    adjustment_duration = 5  # seconds
     exo_ON = True
     adaptation_ON = True
     replay_buffer_ON = False
@@ -40,9 +40,11 @@ if __name__ == '__main__':
     pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/hyperparam_optimized-input_modality_6/hyperparam_optimized-input_modality_6.pt'
     # torque profile path
     torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE/torque_splines.pkl'
+    # AB average input path
+    ab_avg_input_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE/ab_avg_input.pkl'
 
     # Initialize Control loop class
-    controller = Controller(pt_model_path, trt_engine_path, torque_profile_path,
+    controller = Controller(pt_model_path, trt_engine_path, torque_profile_path, ab_avg_input_path,
                             trigger_type, trial_name,
                             pulse_after_start, trial_dur_sec, adjustment_duration,
                             body_mass_kg,

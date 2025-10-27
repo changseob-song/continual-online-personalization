@@ -6,6 +6,7 @@ import numpy as np
 import multiprocessing as mp
 from torch.utils.data import Dataset, Subset, DataLoader
 from scipy.signal import find_peaks
+from Utils import get_congruency_rmse_1d, NumpyCompatUnpickler
 
 def adaptation_worker_warmup(model, optimizer, criterion, device, model_path, input_mean, input_std, label_mean, label_std):
     # --- Warm-up Phase ---
@@ -68,13 +69,45 @@ def interpolate_two_cycles(cycle1, cycle2, weight):
     interpolated_cycle = cycle1_upsampled * weight + cycle2_upsampled * (1 - weight)
     return interpolated_cycle
 
-def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, replay_buffer_ON=False):
+def determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, inclinations_all, speeds_all):
+    rmse_min = float('inf')
+    for incline in inclinations_all:
+        for speed in speeds_all:
+            if incline != 'LG' and speed not in ['0p4mps', '0p5mps', '0p6mps', '0p7mps', '0p8mps', '0p9mps', '1p0mps']: continue
+            if (incline == 'RD_10deg' or incline == 'RD_7p5deg') and speed in ['0p4mps', '0p5mps', '0p6mps', '0p7mps']: continue
+            for gc in range(2):
+                ab_avg_cycle = ab_avg_input[incline][speed][gc].T[:, 6]  # shape: (n_features, n_samples)
+                # Extract the latest gait cycle from input_data
+                if gc == 0:
+                    start_idx = 0
+                    end_idx = mid_peak_idx[0]
+                elif gc == 1:
+                    start_idx = mid_peak_idx[0]
+                    end_idx = len(mtr_pos_stream)
+                current_cycle = mtr_pos_stream[start_idx:end_idx]
+                print(mid_peak_idx, len(mtr_pos_stream), len(current_cycle), len(ab_avg_cycle))
+
+                rmse = get_congruency_rmse_1d(current_cycle, ab_avg_cycle)
+                if rmse < rmse_min:
+                    rmse_min = rmse
+                    best_incline = incline
+                    best_speed = speed
+
+    return best_incline, best_speed, rmse_min
+
+
+def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, hyperparam_config, replay_buffer_ON=False):
     """
     This worker process handles the fine-tuning of the model.
     All PyTorch and CUDA initializations happen inside this function.
     """
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Adaptation Worker: Using device: {device}")
+
+    with open(ab_avg_input_path, "rb") as f:
+        ab_avg_input = NumpyCompatUnpickler(f).load()
+
+    print(ab_avg_input['LG']['1p0mps'][0].shape)
 
     base_model_path = os.path.dirname(model_path)
     input_mean = np.load(os.path.join(base_model_path, 'input_mean.npy'))
@@ -114,32 +147,33 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
     while True:
         try:
             # Wait for data from the main controller
-            side, incline, speed, input_data, mid_peak_idx = input_q.get() # input data shape : (length, channel num)
+            side, input_data, mtr_pos_stream, mid_peak_idx = input_q.get() # input data shape : (length, channel num)
             
             start_time = time.time()
 
-            # Determine which model and optimizer to use
+            # Determine either left or right side
             model = model_R if side == 'R' else model_L
             optimizer = optimizer_R if side == 'R' else optimizer_L
 
-            print(input_data.shape)
+            # Determine the task by comparing congruency with AB average input
+            incline, speed, rmse_min = determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, inclinations_all, speeds_all)
+            print(time.time() - start_time)
+            print(f"Adaptation Worker: Detected task - Incline: {incline}, Speed: {speed} with congruency RMSE: {rmse_min} for side {side}")
+
             # if bin_state[incline][speed] == 1:
             #     input_data = interpolate_two_cycles(input_data.T, input_stream[incline][speed].T, weight=0.5)
             #     input_data = input_data.T  # Transpose back to (length, channel num)
 
             # Create dataset
             dataset = LoadData(side, incline, speed, input_data, mid_peak_idx, model_path, input_mean, input_std, label_mean, label_std)
-
-            # If LoadData returns nothing, skip the current update.
-            if not dataset.initilized: continue
+            if not dataset.initilized: continue # Skip if dataset returns nothing
 
             train_indices = list(range(len(dataset)))
             subset = Subset(dataset, train_indices)
 
             bin_state[incline][speed] = 1
             input_stream[incline][speed] = input_data
-            # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
-            train_loader[incline][speed] = DataLoader(subset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
+            train_loader[incline][speed] = DataLoader(subset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True) # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
 
             if replay_buffer_ON:
                 train_loader_combined_list = []
@@ -187,21 +221,22 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
 
 
 class OnlineAdaptator():
-    def __init__(self, model_path, replay_buffer_ON=False):
+    def __init__(self, model_path, ab_avg_input_path, replay_buffer_ON=False):
         self.model_path = model_path
+        self.ab_avg_input_path = ab_avg_input_path
         self.input_q = mp.Queue()
         self.output_q = mp.Queue()
 
         # Start the new standalone worker process
         self.adaptation_process = mp.Process(
             target=adaptation_worker_process, 
-            args=(self.input_q, self.output_q, self.model_path, hyperparam_config, replay_buffer_ON)
+            args=(self.input_q, self.output_q, self.model_path, self.ab_avg_input_path, hyperparam_config, replay_buffer_ON)
         )
         self.adaptation_process.start()
 
-    def trigger_finetuning(self, side, incline, speed, input_data, mid_peak_idx):
+    def trigger_finetuning(self, side, input_data, mtr_pos_stream, mid_peak_idx):
         """Sends data to the adaptation worker to start fine-tuning."""
-        self.input_q.put((side, incline, speed, input_data, mid_peak_idx))
+        self.input_q.put((side, input_data, mtr_pos_stream, mid_peak_idx))
 
     def get_updated_weights(self):
         """Checks for and returns updated weights from the worker."""

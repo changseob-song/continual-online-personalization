@@ -11,12 +11,13 @@ from Exo import Exo
 from scipy.signal import find_peaks
 
 class Controller:
-    def __init__(self, pt_model_path, trt_engine_path, torque_profile_path,
+    def __init__(self, pt_model_path, trt_engine_path, torque_profile_path, ab_avg_input_path,
                  trigger_type, trial_name, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
                  task_stream, task_interval, replay_buffer_ON):
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
         self.trt_engine_path = trt_engine_path
+        self.ab_avg_input_path = ab_avg_input_path
         self.trigger_type = trigger_type
         self.trial_name = trial_name
         self.body_mass_kg = body_mass_kg
@@ -88,7 +89,7 @@ class Controller:
         self.linear_biases_L = self.linear_biases_R.copy()
 
         # Initialize OnlineAdaptator
-        self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.replay_buffer_ON)
+        self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.ab_avg_input_path, self.replay_buffer_ON)
 
     def run_loop(self, Exo_ON=False, adaptation_ON=False):
 
@@ -222,8 +223,9 @@ class Controller:
                         # Slice the data from the input stream buffer
                         start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
                         input_stream_data_R = input_stream_data[0, :, start_idx_rel:end_idx_rel]
+                        mtr_pos_stream_R = log_mtr_pos_R[start_idx_abs:end_idx_abs]
 
-                        self.online_adaptator.trigger_finetuning('R', current_incline, current_speed, input_stream_data_R.T.copy(), mid_peak_idx_rel)
+                        self.online_adaptator.trigger_finetuning('R', input_stream_data_R.T.copy(), mtr_pos_stream_R, mid_peak_idx_rel)
 
                         # Update the last used peak to the end of the current window
                         self.last_used_peak_idx_R = end_idx_abs
@@ -239,8 +241,9 @@ class Controller:
                         # Slice the data from the input stream buffer
                         start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
                         input_stream_data_L = input_stream_data[1, :, start_idx_rel:end_idx_rel]
+                        mtr_pos_stream_L = log_mtr_pos_L[start_idx_abs:end_idx_abs]
 
-                        self.online_adaptator.trigger_finetuning('L', current_incline, current_speed, input_stream_data_L.T.copy(), mid_peak_idx_rel)
+                        self.online_adaptator.trigger_finetuning('L', input_stream_data_L.T.copy(), mtr_pos_stream_L, mid_peak_idx_rel)
 
                         # Update the last used peak to the end of the current window
                         self.last_used_peak_idx_L = end_idx_abs

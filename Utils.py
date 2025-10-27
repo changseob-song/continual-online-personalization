@@ -17,6 +17,17 @@ class NumpyCompatUnpickler(pickle.Unpickler):
             module = "numpy.core.multiarray"
         return super().find_class(module, name)
 
+def get_congruency_rmse_1d(data_1, data_2):
+
+    if len(data_1) > len(data_2):
+        data_1 = data_1[:len(data_2)]
+        # print("data_1 longer")
+    else:
+        data_2 = data_2[:len(data_1)]
+        # print("data_2 longer")
+    rmse = np.sqrt(np.mean((data_1 - data_2) ** 2))
+    return rmse
+
 def causal_filter(data, tau=0.1, dt=0.01, y0=None, return_last=False):
     x = data
     x = np.asarray(x, dtype=float)
