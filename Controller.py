@@ -13,7 +13,7 @@ from scipy.signal import find_peaks
 class Controller:
     def __init__(self, pt_model_path, trt_engine_path, torque_profile_path, ab_avg_input_path,
                  trigger_type, trial_name, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
-                 task_stream, task_interval, replay_buffer_ON):
+                 replay_buffer_ON):
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
         self.trt_engine_path = trt_engine_path
@@ -24,8 +24,6 @@ class Controller:
         self.pulse_after_start = pulse_after_start
         self.trial_dur_sec = trial_dur_sec
         self.adjustment_duration = adjustment_duration
-        self.task_stream = task_stream
-        self.task_interval = task_interval
         self.replay_buffer_ON = replay_buffer_ON
         self.last_used_peak_idx_L = 0
         self.last_used_peak_idx_R = 0
@@ -39,10 +37,11 @@ class Controller:
             'timestamp': np.zeros(max_samples),
             'mtr_pos_L': np.zeros(max_samples), 'mtr_pos_R': np.zeros(max_samples),
             'mtr_vel_L': np.zeros(max_samples), 'mtr_vel_R': np.zeros(max_samples),
-            'imu_P': np.zeros((max_samples, 6)), 'imu_L': np.zeros((max_samples, 6)), 'imu_R': np.zeros((max_samples, 6)),
+            'imu_L': np.zeros((max_samples, 6)), 'imu_R': np.zeros((max_samples, 6)),
             'mtr_cmd_L': np.zeros(max_samples), 'mtr_cmd_R': np.zeros(max_samples),
             'gait_phase_L': np.zeros(max_samples), 'gait_phase_R': np.zeros(max_samples),
-            'incline': ['']*max_samples, 'speed': ['']*max_samples,
+            'incline_L': ['']*max_samples, 'speed_L': ['']*max_samples,
+            'incline_R': ['']*max_samples, 'speed_R': ['']*max_samples,
             'gpio_output': np.zeros(max_samples)  # GPIO output state
         }
 
@@ -108,7 +107,7 @@ class Controller:
         gait_phase_R_prev = 0.0
         gait_phase_L_prev = 0.0
 
-        local_p_data = np.zeros(6); local_l_data = np.zeros(6); local_r_data = np.zeros(6)
+        local_l_data = np.zeros(6); local_r_data = np.zeros(6)
 
         right_data = np.zeros(self.num_input_features); left_data = np.zeros(self.num_input_features)
 
@@ -116,17 +115,24 @@ class Controller:
         model_output_r_val = last_model_output_r; model_output_l_val = last_model_output_l
 
         update_time_R, update_time_L = 0.0, 0.0
+        avg_loss_R, avg_loss_L = 0.0, 0.0
 
         # Create local references to data arrays for faster access
         log_timestamp = self.data_to_save['timestamp']
         log_mtr_pos_L, log_mtr_pos_R = self.data_to_save['mtr_pos_L'], self.data_to_save['mtr_pos_R']
         log_mtr_vel_L, log_mtr_vel_R = self.data_to_save['mtr_vel_L'], self.data_to_save['mtr_vel_R']
-        log_imu_P, log_imu_L, log_imu_R = self.data_to_save['imu_P'], self.data_to_save['imu_L'], self.data_to_save['imu_R']
+        log_imu_L, log_imu_R = self.data_to_save['imu_L'], self.data_to_save['imu_R']
         log_mtr_cmd_L, log_mtr_cmd_R = self.data_to_save['mtr_cmd_L'], self.data_to_save['mtr_cmd_R']
         log_gait_phase_L, log_gait_phase_R = self.data_to_save['gait_phase_L'], self.data_to_save['gait_phase_R']
-        
-        log_incline, log_speed = self.data_to_save['incline'], self.data_to_save['speed']
+
+        log_incline_L, log_speed_L = self.data_to_save['incline_L'], self.data_to_save['speed_L']
+        log_incline_R, log_speed_R = self.data_to_save['incline_R'], self.data_to_save['speed_R']
         log_gpio_output = self.data_to_save['gpio_output']
+
+        current_incline_L = 'LG'; current_speed_L = '0p2mps'  # Default task settings
+        prev_incline_L = current_incline_L; prev_speed_L = current_speed_L
+        current_incline_R = 'LG'; current_speed_R = '0p2mps'  # Default task settings
+        prev_incline_R = current_incline_R; prev_speed_R = current_speed_R
 
         # Start recording time
         first_pulse_sent = False
@@ -151,11 +157,8 @@ class Controller:
         # Main control loop
         while True:
 
-            # Get the task index
-            task_idx = int((loop_index/self.Exo.control_freq_Hz - self.pulse_after_start)//self.task_interval)
-            task_idx = max(0, task_idx)
-            current_incline, current_speed = self.task_stream[task_idx].split('-')
-            log_incline[loop_index] = current_incline; log_speed[loop_index] = current_speed
+            log_incline_L[loop_index] = current_incline_L; log_speed_L[loop_index] = current_speed_L
+            log_incline_R[loop_index] = current_incline_R; log_speed_R[loop_index] = current_speed_R
 
             # 1. Read the motor encoder values
             current_pos_L, current_vel_L = self.Exo.update_readings(self.Exo.CAN_id_L)
@@ -169,13 +172,10 @@ class Controller:
             # 2. Read the IMU values
             imu_dict = self.Exo.imus.read_IMUs()
 
-            local_p_data = imu_dict["IMU_PELVIS"]; local_l_data = imu_dict["IMU_THIGH_LEFT"]; local_r_data = imu_dict["IMU_THIGH_RIGHT"]
-            log_imu_P[loop_index, :] = local_p_data; log_imu_L[loop_index, :] = local_l_data; log_imu_R[loop_index, :] = local_r_data
+            local_l_data = imu_dict["IMU_THIGH_LEFT"]; local_r_data = imu_dict["IMU_THIGH_RIGHT"]
+            log_imu_L[loop_index, :] = local_l_data; log_imu_R[loop_index, :] = local_r_data
 
             # 3. Mirror the left data to the right side
-            p_data_reflected = local_p_data.copy()
-            p_data_reflected[1] *= -1; p_data_reflected[3] *= -1; p_data_reflected[5] *= -1
-
             l_data_reflected = local_l_data.copy()
             l_data_reflected[1] *= -1; l_data_reflected[3] *= -1; l_data_reflected[5] *= -1
             
@@ -216,9 +216,8 @@ class Controller:
                     if len(peak_indices_R) > update_freq_gc:
                         # Get the absolute start and end indices for the data slice
                         start_idx_abs = peak_indices_R[0]; end_idx_abs = peak_indices_R[-1]
-                        print('R', start_idx_abs, peak_indices_R[-2], end_idx_abs)
+                        print('\nR', start_idx_abs, peak_indices_R[-2], end_idx_abs)
                         mid_peak_idx_rel = peak_indices_R[1:-1] - start_idx_abs # This is relative about start_idx_abs
-                        incline_stream = log_incline[start_idx_abs:end_idx_abs]; speed_stream = log_speed[start_idx_abs:end_idx_abs]
 
                         # Slice the data from the input stream buffer
                         start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
@@ -235,8 +234,8 @@ class Controller:
                     if len(peak_indices_L) > update_freq_gc:
                         # Get the absolute start and end indices for the data slice
                         start_idx_abs = peak_indices_L[0]; end_idx_abs = peak_indices_L[-1]
+                        # print('\nL', start_idx_abs, peak_indices_L[-2], end_idx_abs)
                         mid_peak_idx_rel = peak_indices_L[1:-1] - start_idx_abs # This is relative about start_idx_abs
-                        incline_stream = log_incline[start_idx_abs:end_idx_abs]; speed_stream = log_speed[start_idx_abs:end_idx_abs]
 
                         # Slice the data from the input stream buffer
                         start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
@@ -251,15 +250,15 @@ class Controller:
             # Check for new weights from the adaptation worker
             updated_params = self.online_adaptator.get_updated_weights()
             if updated_params:
-                side, update_time, weights, biases = updated_params                
+                side, current_incline, current_speed, avg_loss, update_time, weights, biases = updated_params
                 if side == 'R':
-                    self.linear_weights_R = weights
-                    self.linear_biases_R = biases
-                    update_time_R = update_time
+                    self.linear_weights_R = weights;    self.linear_biases_R = biases
+                    current_incline_R = current_incline; current_speed_R = current_speed
+                    avg_loss_R = avg_loss;  update_time_R = update_time
                 elif side == 'L':
-                    self.linear_weights_L = weights
-                    self.linear_biases_L = biases
-                    update_time_L = update_time
+                    self.linear_weights_L = weights;    self.linear_biases_L = biases
+                    current_incline_L = current_incline; current_speed_L = current_speed
+                    avg_loss_L = avg_loss;  update_time_L = update_time
 
             # 5. TensorRT inference & Apply linear layer weights and biases
             self.input_q.put((model_input_arr[0, :, :].copy(), model_input_arr[1, :, :].copy()))
@@ -284,22 +283,33 @@ class Controller:
             gait_phase_L = cartesian_to_percentage(model_output_l_denorm)
 
             # Store previous gait phase if decreasing
-            if (gait_phase_R < gait_phase_R_prev) and (gait_phase_R_prev < 90): gait_phase_R = gait_phase_R_prev
+            if (gait_phase_R < gait_phase_R_prev) and (gait_phase_R_prev < 95): gait_phase_R = gait_phase_R_prev
             else: gait_phase_R_prev = gait_phase_R
-            if (gait_phase_L < gait_phase_L_prev) and (gait_phase_L_prev < 90): gait_phase_L = gait_phase_L_prev
+            if (gait_phase_L < gait_phase_L_prev) and (gait_phase_L_prev < 95): gait_phase_L = gait_phase_L_prev
             else: gait_phase_L_prev = gait_phase_L
 
             delayed_gait_phase_R = (gait_phase_R - self.Exo.delay_factor) % 100
             delayed_gait_phase_L = (gait_phase_L - self.Exo.delay_factor) % 100
 
-            if loop_index / self.Exo.control_freq_Hz >= self.pulse_after_start:
-                gradual_torque_scale = min(1.0, ((loop_index / self.Exo.control_freq_Hz) - self.pulse_after_start) / self.adjustment_duration)
-            else:
-                gradual_torque_scale = 0.0
+            # if loop_index / self.Exo.control_freq_Hz >= self.pulse_after_start:
+            #     gradual_torque_scale = min(1.0, ((loop_index / self.Exo.control_freq_Hz) - self.pulse_after_start) / self.adjustment_duration)
+            # else:
+            #     gradual_torque_scale = 0.0
+
+            gradual_torque_scale_L = 1 # np.max((1 - avg_loss_L), 0)
+            gradual_torque_scale_R = 1 # np.max((1 - avg_loss_R), 0)
 
             # 7. Send the torque command to the motors
-            motor_cmd_val_L = self.torque_profile[current_incline][current_speed][int(delayed_gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale
-            motor_cmd_val_R = self.torque_profile[current_incline][current_speed][int(delayed_gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale
+            if delayed_gait_phase_L < 5:
+                motor_cmd_val_L = self.torque_profile[current_incline_L][current_speed_L][int(delayed_gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_L
+                prev_incline_L = current_incline_L; prev_speed_L = current_speed_L
+            else:
+                motor_cmd_val_L = self.torque_profile[prev_incline_L][prev_speed_L][int(delayed_gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_L
+            if delayed_gait_phase_R < 5:
+                motor_cmd_val_R = self.torque_profile[current_incline_R][current_speed_R][int(delayed_gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_R
+                prev_incline_R = current_incline_R; prev_speed_R = current_speed_R
+            else:
+                motor_cmd_val_R = self.torque_profile[prev_incline_R][prev_speed_R][int(delayed_gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_R
 
             motor_cmd_array = fast_roll(motor_cmd_array)
             motor_cmd_array[:, -1] = [motor_cmd_val_R, motor_cmd_val_L]    
@@ -310,10 +320,10 @@ class Controller:
 
             if Exo_ON == False: motor_cmd_val_L, motor_cmd_val_R = 0.0, 0.0 # use this for Exo off condition
 
-            if motor_cmd_val_L > 10 or motor_cmd_val_R > 10:
-                motor_cmd_val_L, motor_cmd_val_R = 10, 10
-            if motor_cmd_val_L < -10 or motor_cmd_val_R < -10:
-                motor_cmd_val_L, motor_cmd_val_R = -10, -10
+            if motor_cmd_val_L > 10:    motor_cmd_val_L = 10
+            elif motor_cmd_val_L < -10: motor_cmd_val_L = -10
+            if motor_cmd_val_R > 10:    motor_cmd_val_R = 10
+            elif motor_cmd_val_R < -10: motor_cmd_val_R = -10
 
             self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_L, motor_cmd_val_L) 
             self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, -motor_cmd_val_R) # Negative sign because the motor is mounted in reverse direction
@@ -365,8 +375,8 @@ class Controller:
             telemetry_data = {
                 "pos_R": current_pos_R,
                 "pos_L": current_pos_L,
-                "vel_R": current_vel_R,
-                "vel_L": current_vel_L,
+                "gyroY_R": local_r_data[4],
+                "gyroY_L": local_l_data[4],
                 "cmd_R": motor_cmd_val_R,
                 "cmd_L": motor_cmd_val_L,
                 "gait_phase_R": gait_phase_R,

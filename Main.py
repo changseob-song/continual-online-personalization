@@ -1,6 +1,5 @@
 import torch, gc
 import multiprocessing as mp
-
 from Controller import Controller
 from Utils_Mocap_trigger import Mocap_trigger
 
@@ -11,27 +10,19 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting
-    trial_name = 'online_test_5-adaptation_on'
-    pulse_after_start = 0 # seconds
-    trial_dur_sec = 90  # seconds
-    adjustment_duration = 5  # seconds
+    trial_name = 'online_test-congruency-AB_Changseob-RD_5deg'
+    pulse_after_start = 0  # seconds
+    trial_dur_sec = 15*4  # seconds
+    adjustment_duration = 10  # seconds
     exo_ON = True
     adaptation_ON = True
     replay_buffer_ON = False
 
     # Trigger setting
-    trigger_type = "typing"  # "mocap" or "typing"
+    trigger_type = "mocap"  # "mocap" or "typing"
 
     # Body mass setting
-    body_mass_kg = 72  # kg
-
-    # Task stream
-    task_stream = ['LG-1p0mps', 'LG-1p0mps', 'LG-1p0mps',
-                   'RA_5deg-0p5mps', 'RA_5deg-0p8mps',
-                   'LG-0p6mps', 'LG-0p8mps',
-                   'RD_10deg-0p8mps', 'RD_10deg-1p0mps',
-                   'LG-0p5mps', 'LG-0p7mps']
-    task_interval = 30 # seconds
+    body_mass_kg = 80  # kg
 
     # Model path
     # tcn_only
@@ -48,7 +39,6 @@ if __name__ == '__main__':
                             trigger_type, trial_name,
                             pulse_after_start, trial_dur_sec, adjustment_duration,
                             body_mass_kg,
-                            task_stream, task_interval,
                             replay_buffer_ON
                             )
 

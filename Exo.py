@@ -12,7 +12,7 @@ class Exo:
         self.frame_length = 100  # Window size (in frames)
 
         # biotorque parameters
-        self.scale_factor = 0.2
+        self.scale_factor = 0.15
         self.delay_factor = 0  # Number of frames to delay the torque command
 
         # note: motors zero themselves when actuation.Motors() runs

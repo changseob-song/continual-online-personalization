@@ -17,16 +17,45 @@ class NumpyCompatUnpickler(pickle.Unpickler):
             module = "numpy.core.multiarray"
         return super().find_class(module, name)
 
-def get_congruency_rmse_1d(data_1, data_2):
+def upsampling(data, target_length):
+    """
+    Upsample a 1D numpy array to the desired target length using linear interpolation.
+    """
+    original_length = len(data)
+    original_indices = np.linspace(0, original_length - 1, original_length)
+    new_indices = np.linspace(0, original_length - 1, target_length)
 
-    if len(data_1) > len(data_2):
-        data_1 = data_1[:len(data_2)]
-        # print("data_1 longer")
-    else:
-        data_2 = data_2[:len(data_1)]
-        # print("data_2 longer")
+    return np.interp(new_indices, original_indices, data)
+
+def upsampling_2d(data, target_length):
+    """
+    Upsample a 2D numpy array to the desired target length using linear interpolation.
+    data: numpy array of shape (n_features, n_samples)
+    target_length: desired length of each segment after upsampling
+    """
+    upsampled_data = np.zeros((target_length, data.shape[1]))  # (target_length, n_features)
+    for i in range(data.shape[1]):
+        upsampled_data[:, i] = upsampling(data[:, i], target_length)
+
+    return upsampled_data  # (target_length, n_features)
+
+def get_congruency_rmse_1d(data_1, data_2):
+    len_1 = len(data_1)
+    len_2 = len(data_2)
+    len_rmse = np.abs(len_1 - len_2)
+    data_1 = upsampling(data_1, 100)
+    data_2 = upsampling(data_2, 100)
     rmse = np.sqrt(np.mean((data_1 - data_2) ** 2))
-    return rmse
+    return rmse, len_rmse
+
+def get_congruency_rmse_2d(data_1, data_2):
+    len_1 = data_1.shape[0]
+    len_2 = data_2.shape[0]
+    len_rmse = np.abs(len_1 - len_2)
+    data_1 = upsampling_2d(data_1, 100)
+    data_2 = upsampling_2d(data_2, 100)
+    rmse = np.sqrt(np.mean((data_1 - data_2) ** 2))
+    return rmse, len_rmse
 
 def causal_filter(data, tau=0.1, dt=0.01, y0=None, return_last=False):
     x = data
@@ -207,7 +236,7 @@ def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None)
 
     # Define data for IMU CSV
     imu_df_data = {'timestamp': sliced_data['timestamp']}
-    imu_sensors = {'P': 'Pelvis', 'L': 'Thigh_L', 'R': 'Thigh_R'}
+    imu_sensors = {'L': 'Thigh_L', 'R': 'Thigh_R'}
     imu_axes = ['Acc_X', 'Acc_Y', 'Acc_Z', 'Gyr_X', 'Gyr_Y', 'Gyr_Z']
     for sensor_code, sensor_name in imu_sensors.items():
         for i, axis_name in enumerate(imu_axes):
@@ -222,7 +251,8 @@ def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None)
 
     # Define data for torque CSV
     torque_cols = ['timestamp', 'gait_phase_L', 'gait_phase_R', 
-                   'mtr_cmd_L', 'mtr_cmd_R', 'gpio_output']
+                   'mtr_cmd_L', 'mtr_cmd_R', 
+                   'incline_L', 'speed_L', 'incline_R', 'speed_R', 'gpio_output']
     save_dataframe(f'{trial_name}_output_torque.csv', sliced_data, torque_cols)
 
 # Helper function to create and save DataFrame

@@ -6,7 +6,7 @@ import numpy as np
 import multiprocessing as mp
 from torch.utils.data import Dataset, Subset, DataLoader
 from scipy.signal import find_peaks
-from Utils import get_congruency_rmse_1d, NumpyCompatUnpickler
+from Utils import get_congruency_rmse_1d, get_congruency_rmse_2d, NumpyCompatUnpickler
 
 def adaptation_worker_warmup(model, optimizer, criterion, device, model_path, input_mean, input_std, label_mean, label_std):
     # --- Warm-up Phase ---
@@ -70,13 +70,13 @@ def interpolate_two_cycles(cycle1, cycle2, weight):
     return interpolated_cycle
 
 def determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, inclinations_all, speeds_all):
-    rmse_min = float('inf')
+    combined_rmse_min = float('inf')
     for incline in inclinations_all:
         for speed in speeds_all:
             if incline != 'LG' and speed not in ['0p4mps', '0p5mps', '0p6mps', '0p7mps', '0p8mps', '0p9mps', '1p0mps']: continue
             if (incline == 'RD_10deg' or incline == 'RD_7p5deg') and speed in ['0p4mps', '0p5mps', '0p6mps', '0p7mps']: continue
             for gc in range(2):
-                ab_avg_cycle = ab_avg_input[incline][speed][gc].T[:, 6]  # shape: (n_features, n_samples)
+                ab_avg_cycle = ab_avg_input[incline][speed][gc].T[:, 4]  # shape: (n_features, n_samples)
                 # Extract the latest gait cycle from input_data
                 if gc == 0:
                     start_idx = 0
@@ -84,16 +84,20 @@ def determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, incli
                 elif gc == 1:
                     start_idx = mid_peak_idx[0]
                     end_idx = len(mtr_pos_stream)
-                current_cycle = mtr_pos_stream[start_idx:end_idx]
-                print(mid_peak_idx, len(mtr_pos_stream), len(current_cycle), len(ab_avg_cycle))
+                current_cycle = input_data[start_idx:end_idx][:, 4] # gyro_Y
 
-                rmse = get_congruency_rmse_1d(current_cycle, ab_avg_cycle)
-                if rmse < rmse_min:
+                rmse, len_rmse = get_congruency_rmse_1d(current_cycle, ab_avg_cycle)
+                combined_rmse = rmse + (len_rmse * 0.25)
+                if combined_rmse < combined_rmse_min:
+                    combined_rmse_min = combined_rmse
                     rmse_min = rmse
+                    len_rmse_min = len_rmse
                     best_incline = incline
                     best_speed = speed
-
-    return best_incline, best_speed, rmse_min
+    
+                # print(mid_peak_idx, len(mtr_pos_stream), len(current_cycle), len(ab_avg_cycle), rmse_min)
+    print(f"RMSE: {rmse_min:.3f}, Length RMSE: {len_rmse_min}")
+    return best_incline, best_speed, combined_rmse_min
 
 
 def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, hyperparam_config, replay_buffer_ON=False):
@@ -137,8 +141,8 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
 
     adaptation_worker_warmup(model_R, optimizer_R, criterion, device, model_path, input_mean, input_std, label_mean, label_std)
 
-    inclinations_all = ['RD_10deg', 'RD_7p5deg', 'RD_5deg', 'RD_2p5deg', 'LG', 'RA_2p5deg', 'RA_5deg', 'RA_7p5deg', 'RA_10deg']
-    speeds_all = ['0p2mps', '0p3mps', '0p4mps', '0p5mps', '0p6mps', '0p7mps', '0p8mps', '0p9mps', '1p0mps', '1p1mps', '1p2mps', '1p3mps', '1p4mps']
+    inclinations_all = ['RD_10deg', 'RD_5deg', 'LG', 'RA_5deg', 'RA_10deg']
+    speeds_all = ['0p2mps', '0p4mps', '0p6mps', '0p8mps', '1p0mps', '1p2mps', '1p4mps']
     bin_state = {inc: {spd: 0 for spd in speeds_all} for inc in inclinations_all}
     input_stream = {inc: {spd: None for spd in speeds_all} for inc in inclinations_all}
     train_loader = {inc: {spd: None for spd in speeds_all} for inc in inclinations_all}
@@ -157,14 +161,14 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
 
             # Determine the task by comparing congruency with AB average input
             incline, speed, rmse_min = determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, inclinations_all, speeds_all)
-            print(time.time() - start_time)
-            print(f"Adaptation Worker: Detected task - Incline: {incline}, Speed: {speed} with congruency RMSE: {rmse_min} for side {side}")
+            print(f"{time.time() - start_time:.3f}")
+            print(f"\nDetected task - Incline: {incline}, Speed: {speed} with congruency RMSE: {rmse_min:.2f} for side {side}")
 
             # if bin_state[incline][speed] == 1:
             #     input_data = interpolate_two_cycles(input_data.T, input_stream[incline][speed].T, weight=0.5)
             #     input_data = input_data.T  # Transpose back to (length, channel num)
 
-            # Create dataset
+            # Prepare data loader for the current task
             dataset = LoadData(side, incline, speed, input_data, mid_peak_idx, model_path, input_mean, input_std, label_mean, label_std)
             if not dataset.initilized: continue # Skip if dataset returns nothing
 
@@ -175,11 +179,13 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
             input_stream[incline][speed] = input_data
             train_loader[incline][speed] = DataLoader(subset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True) # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
 
+            # Combine data from other tasks only if the bin is filled up
+            train_loader_combined_list = []
             if replay_buffer_ON:
-                train_loader_combined_list = []
                 # Aggregate all train loaders into a single list
                 for inc in inclinations_all:
                     for spd in speeds_all:
+                        if (inc == incline) and (spd == speed): continue # Skip the current task for separate backpropagation
                         if bin_state[inc][spd] == 1:
                             # if side == 'R':
                             #     print(f"Adaptation Worker: Including data from {inc}-{spd} for training. {len(train_loader[inc][spd].dataset)} samples.")
@@ -189,11 +195,24 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
                 if side == 'R':
                     print(f"Adaptation Worker: Total training samples combined: {len(train_loader_combined)}")
                 train_loader_combined = DataLoader(train_loader_combined, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
-            else:
-                train_loader_combined = train_loader[incline][speed]
 
-            # Training loop
-            for input_batch, label_batch in train_loader_combined:
+            # Training loop - other tasks that is already in the buffer
+            if train_loader_combined_list:
+                for input_batch, label_batch in train_loader_combined:
+                    input_batch = input_batch.to(device)
+                    label_batch = label_batch.to(device)
+                    
+                    optimizer.zero_grad()
+                    logits = model(input_batch)
+                    loss = criterion(logits, label_batch)
+
+                    loss.backward()
+                    optimizer.step()
+
+            tloss = 0
+            num_batches = 0
+            # Training loop - current task
+            for input_batch, label_batch in train_loader[incline][speed]:
                 input_batch = input_batch.to(device)
                 label_batch = label_batch.to(device)
                 
@@ -203,6 +222,11 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
 
                 loss.backward()
                 optimizer.step()
+                tloss += loss.item()
+                num_batches += 1
+
+            avg_loss = tloss / num_batches if num_batches > 0 else 0
+            print("avg loss: ", avg_loss)
 
             # After training, get the updated weights and send them back
             updated_weights = model.linear.weight.data.clone().cpu().numpy()
@@ -210,7 +234,7 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
 
             update_time = time.time() - start_time
 
-            output_q.put((side, update_time, updated_weights, updated_biases))
+            output_q.put((side, incline, speed, avg_loss, update_time, updated_weights, updated_biases))
 
         except Exception as e:
             print(f"Adaptation worker error: {e}")
