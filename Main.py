@@ -10,19 +10,19 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting
-    trial_name = 'online_test-congruency-AB_Changseob-RD_5deg'
+    trial_name = 'online_test-buffer-LG'
     pulse_after_start = 0  # seconds
-    trial_dur_sec = 15*4  # seconds
+    trial_dur_sec = 150 #15*7  # seconds
     adjustment_duration = 10  # seconds
     exo_ON = True
     adaptation_ON = True
-    replay_buffer_ON = False
+    replay_buffer_ON = True
 
     # Trigger setting
     trigger_type = "mocap"  # "mocap" or "typing"
 
     # Body mass setting
-    body_mass_kg = 80  # kg
+    body_mass_kg = 72  # kg
 
     # Model path
     # tcn_only

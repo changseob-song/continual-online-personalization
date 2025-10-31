@@ -1,7 +1,7 @@
 # %%
 from Hyperparam import hyperparam_config
 from Model import TCN
-import torch, os, time
+import torch, os, time, random
 import numpy as np
 import multiprocessing as mp
 from torch.utils.data import Dataset, Subset, DataLoader
@@ -96,7 +96,7 @@ def determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, incli
                     best_speed = speed
     
                 # print(mid_peak_idx, len(mtr_pos_stream), len(current_cycle), len(ab_avg_cycle), rmse_min)
-    print(f"RMSE: {rmse_min:.3f}, Length RMSE: {len_rmse_min}")
+    # print(f"RMSE: {rmse_min:.3f}, Length RMSE: {len_rmse_min}")
     return best_incline, best_speed, combined_rmse_min
 
 
@@ -161,7 +161,6 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
 
             # Determine the task by comparing congruency with AB average input
             incline, speed, rmse_min = determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, inclinations_all, speeds_all)
-            print(f"{time.time() - start_time:.3f}")
             print(f"\nDetected task - Incline: {incline}, Speed: {speed} with congruency RMSE: {rmse_min:.2f} for side {side}")
 
             # if bin_state[incline][speed] == 1:
@@ -179,22 +178,31 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
             input_stream[incline][speed] = input_data
             train_loader[incline][speed] = DataLoader(subset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True) # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
 
-            # Combine data from other tasks only if the bin is filled up
             train_loader_combined_list = []
+            sampled_bins = []
             if replay_buffer_ON:
-                # Aggregate all train loaders into a single list
-                for inc in inclinations_all:
-                    for spd in speeds_all:
-                        if (inc == incline) and (spd == speed): continue # Skip the current task for separate backpropagation
-                        if bin_state[inc][spd] == 1:
-                            # if side == 'R':
-                            #     print(f"Adaptation Worker: Including data from {inc}-{spd} for training. {len(train_loader[inc][spd].dataset)} samples.")
-                            train_loader_combined_list.append(train_loader[inc][spd])
+                # Get the positive bins excluding the current task
+                positive_bins = [(inc, spd) for inc in inclinations_all for spd in speeds_all if (bin_state[inc][spd] > 0) and not (inc == incline and spd == speed)]
+                
+                # Only sample if there are positive bins to sample from
+                if positive_bins:
+                    num_samples = min(1, len(positive_bins)) # Sample just one & Ensure we don't sample more than available
+                    sampled_bins = random.sample(positive_bins, num_samples)
+                    print(f"Adaptation Worker: Sampling from bins: {sampled_bins}")
 
-                train_loader_combined = torch.utils.data.ConcatDataset([loader.dataset for loader in train_loader_combined_list])
-                if side == 'R':
-                    print(f"Adaptation Worker: Total training samples combined: {len(train_loader_combined)}")
-                train_loader_combined = DataLoader(train_loader_combined, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
+                # Aggregate all train loaders into a single list
+                for inc, spd in sampled_bins:
+                    # This check is redundant now but safe to keep
+                    if (inc == incline) and (spd == speed): continue 
+                    if bin_state[inc][spd] == 1:
+                        print(f"Adaptation Worker: Including data from {side}-{inc}-{spd} for training. {len(train_loader[inc][spd].dataset)} samples.")
+                        train_loader_combined_list.append(train_loader[inc][spd])
+
+                if train_loader_combined_list:
+                    train_loader_combined = torch.utils.data.ConcatDataset([loader.dataset for loader in train_loader_combined_list])
+                    # if side == 'R':
+                        # print(f"Adaptation Worker: Total training samples combined: {len(train_loader_combined)}")
+                    train_loader_combined = DataLoader(train_loader_combined, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
 
             # Training loop - other tasks that is already in the buffer
             if train_loader_combined_list:
@@ -209,9 +217,9 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
                     loss.backward()
                     optimizer.step()
 
+            # Training loop - current task
             tloss = 0
             num_batches = 0
-            # Training loop - current task
             for input_batch, label_batch in train_loader[incline][speed]:
                 input_batch = input_batch.to(device)
                 label_batch = label_batch.to(device)
@@ -226,7 +234,7 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
                 num_batches += 1
 
             avg_loss = tloss / num_batches if num_batches > 0 else 0
-            print("avg loss: ", avg_loss)
+            # print("avg loss: ", avg_loss)
 
             # After training, get the updated weights and send them back
             updated_weights = model.linear.weight.data.clone().cpu().numpy()
