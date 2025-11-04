@@ -159,16 +159,17 @@ def trt_inference(input_data, output_shape, context):
     return output
 
 # Inference worker function for multiprocessing
-def inference_worker(input_q, output_q, trt_engine_path,
-                     input_mean_path, input_std_path,
-                     label_mean_path, label_std_path,
-                     num_input_features, frame_length):
+def inference_worker(input_q, output_q, trt_engine_path, trt_task_estimator_path,
+                     input_mean_path, input_std_path, label_mean_path, label_std_path,
+                     input_mean_task_estimator_path, input_std_task_estimator_path, label_mean_task_estimator_path, label_std_task_estimator_path,
+                     num_input_features, frame_length, frame_length_task):
     if torch.cuda.is_available():
         device = torch.device("cuda")
 
     logger = trt.Logger(trt.Logger.WARNING)
     runtime = trt.Runtime(logger)
 
+    # Engine for gait phase estimation
     with open(trt_engine_path, 'rb') as f:
         serialized_engine = f.read()
     engine = runtime.deserialize_cuda_engine(serialized_engine)
@@ -177,15 +178,22 @@ def inference_worker(input_q, output_q, trt_engine_path,
         return
     context = engine.create_execution_context()
 
-    input_mean = np.load(input_mean_path).astype(np.float32)
-    input_std = np.load(input_std_path).astype(np.float32)
-    label_mean = np.load(label_mean_path).astype(np.float32)
-    label_std = np.load(label_std_path).astype(np.float32)
+    # Engine for task estimation
+    with open(trt_task_estimator_path, 'rb') as f:
+        serialized_engine_task = f.read()
+    engine_task = runtime.deserialize_cuda_engine(serialized_engine_task)
+    if engine_task is None:
+        print("Worker: Failed to deserialize TensorRT task estimator engine.")
+        return
+    context_task = engine_task.create_execution_context()
 
     dummy_input_data = np.zeros((1, num_input_features, frame_length), dtype=np.float32)
     dummy_output_shape = (80, 100)
+    dummy_output_shape_task = (2,)
     for _ in range(10):
         _ = trt_inference(dummy_input_data, dummy_output_shape, context)
+    for _ in range(10):
+        _ = trt_inference(dummy_input_data, dummy_output_shape_task, context_task)
     print("TensorRT engine warmed up.")
 
     while True:
@@ -197,14 +205,17 @@ def inference_worker(input_q, output_q, trt_engine_path,
 
             model_input_r_arr, model_input_l_arr = data_in
 
-            # Right Model Inferencing
+            # Gait phase estimation
             output_shape = (80, 100)  # Assuming scalar output from model
             model_output_r = trt_inference(model_input_r_arr, output_shape, context)
-
-            # Left Model Inferencing
             model_output_l = trt_inference(model_input_l_arr, output_shape, context)
 
-            output_q.put((model_output_r, model_output_l))
+            # Task estimation
+            output_shape_task = (2,)  # Assuming scalar output from model
+            model_output_task_r = trt_inference(model_input_r_arr, output_shape_task, context_task) # We assume here that the input frame length is same as gait phase estimator
+            model_output_task_l = trt_inference(model_input_l_arr, output_shape_task, context_task)
+
+            output_q.put((model_output_r, model_output_l, model_output_task_r, model_output_task_l))
         except Exception as e:
             print(f"Worker: Error during inference: {e}")
             break

@@ -121,10 +121,16 @@ class TCN(nn.Module):
         self.tcn = TemporalConvNet(self.input_size, self.num_channels, self.number_of_layers, self.kernel_size, self.dropout, self.dilations)
         self.linear = nn.Linear(self.num_channels[-1] * self.window_size, self.output_size)
         
+        # print("\nTCN parameter #: ", sum(p.numel() for p in self.tcn.parameters()))
+        # print("\nFCNN parameter #: ",sum(p.numel() for p in self.linear.parameters()))
+        
+        # Print model summary with auto-calculated sequence length
+        # summary(self, input_size=(self.input_size, self.window_size))
+
     def forward(self, x):
         # x shape: (batch_size, input_size, time window size = sequence length)
         y = self.tcn(x)
         # Flatten the output from the TCN layer
         y = y.flatten(start_dim=1) # Shape: (batch_size, num_channels[-1] * sequence_length)
-        y = self.linear(y)
+        y = self.linear(y.float())
         return y

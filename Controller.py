@@ -11,12 +11,13 @@ from Exo import Exo
 from scipy.signal import find_peaks
 
 class Controller:
-    def __init__(self, pt_model_path, trt_engine_path, torque_profile_path, ab_avg_input_path,
+    def __init__(self, pt_model_path, trt_engine_path, trt_task_estimator_path, torque_profile_path, ab_avg_input_path,
                  trigger_type, trial_name, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
                  adaptation_ON=False, replay_buffer_ON=False):
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
         self.trt_engine_path = trt_engine_path
+        self.trt_task_estimator_path = trt_task_estimator_path
         self.ab_avg_input_path = ab_avg_input_path
         self.trigger_type = trigger_type
         self.trial_name = trial_name
@@ -56,9 +57,18 @@ class Controller:
         label_mean_path = os.path.join(base_model_path, 'label_mean.npy')
         label_std_path = os.path.join(base_model_path, 'label_std.npy')
 
+        task_estimator_path = os.path.dirname(self.trt_task_estimator_path)
+        input_mean_task_estimator_path = os.path.join(task_estimator_path, 'input_mean.npy')
+        input_std_task_estimator_path = os.path.join(task_estimator_path, 'input_std.npy')
+        label_mean_task_estimator_path = os.path.join(task_estimator_path, 'label_mean.npy')
+        label_std_task_estimator_path = os.path.join(task_estimator_path, 'label_std.npy')
+
         self.input_mean = np.load(input_mean_path); self.input_std = np.load(input_std_path)
         self.label_mean = np.load(label_mean_path); self.label_std = np.load(label_std_path)
         self.num_input_features = self.input_mean.shape[0]
+
+        self.input_mean_task = np.load(input_mean_task_estimator_path);   self.input_std_task = np.load(input_std_task_estimator_path)
+        self.label_mean_task = np.load(label_mean_task_estimator_path);   self.label_std_task = np.load(label_std_task_estimator_path)
 
         # Initialize the exoskeleton
         if self.trigger_type == "mocap":
@@ -76,9 +86,10 @@ class Controller:
 
         # Start inference_worker process
         self.inference_process = mp.Process(target=inference_worker,
-                                    args=(self.input_q, self.output_q, self.trt_engine_path,
+                                    args=(self.input_q, self.output_q, self.trt_engine_path, self.trt_task_estimator_path,
                                             input_mean_path, input_std_path,label_mean_path, label_std_path,
-                                            self.num_input_features, self.Exo.frame_length))
+                                            input_mean_task_estimator_path, input_std_task_estimator_path, label_mean_task_estimator_path, label_std_task_estimator_path,
+                                            self.num_input_features, self.Exo.frame_length, self.Exo.frame_length_task))
         self.inference_process.start()
 
         # Extract linear layer weights and biases from the PyTorch model
@@ -102,6 +113,8 @@ class Controller:
         # Predefine input stream data size for online adaptation (6 seconds buffer)
         input_stream_data = np.zeros((2, self.num_input_features, 6 * self.Exo.control_freq_Hz), dtype=np.float32)  # 100 frames of input data
         motor_cmd_array = np.zeros((2, self.Exo.frame_length), dtype=np.float32)  # for torque command filtering
+        incline_pred_history = np.zeros((2, self.Exo.frame_length_task), dtype=np.float32)
+        speed_pred_history = np.zeros((2, self.Exo.frame_length_task), dtype=np.float32)
 
         current_pos_L, current_vel_L = 0.0, 0.0
         current_pos_R, current_vel_R = 0.0, 0.0
@@ -113,7 +126,16 @@ class Controller:
         right_data = np.zeros(self.num_input_features); left_data = np.zeros(self.num_input_features)
 
         last_model_output_r = np.zeros((80, 100), dtype=np.float32); last_model_output_l = np.zeros((80, 100), dtype=np.float32)
+        last_model_output_r_task = np.zeros((2,), dtype=np.float32); last_model_output_l_task = np.zeros((2,), dtype=np.float32)
         model_output_r_val = last_model_output_r; model_output_l_val = last_model_output_l
+        model_output_r_task = last_model_output_r_task; model_output_l_task = last_model_output_l_task
+
+        incline_keys = {-10: "RD_10deg", -5: "RD_5deg", 0: "LG", 5: "RA_5deg", 10: "RA_10deg"}
+        speed_keys = {0.2: "0p2mps", 0.4: "0p4mps", 0.6: "0p6mps", 0.8: "0p8mps", 1.0: "1p0mps", 1.2: "1p2mps", 1.4: "1p4mps"}
+        incline_thresholds = [-7.5, -2.5, 2.5, 7.5]
+        incline_values = [-10, -5, 0, 5, 10]
+        speed_thresholds = [0.3, 0.5, 0.7, 0.9, 1.1, 1.3]
+        speed_values = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4]
 
         update_time_R, update_time_L = 0.0, 0.0
         avg_loss_R, avg_loss_L = 0.0, 0.0
@@ -131,8 +153,10 @@ class Controller:
         log_gpio_output = self.data_to_save['gpio_output']
 
         current_incline_L = 'LG'; current_speed_L = '0p2mps'  # Default task settings
+        current_incline_L_val = 0; current_speed_L_val = 0
         prev_incline_L = current_incline_L; prev_speed_L = current_speed_L
         current_incline_R = 'LG'; current_speed_R = '0p2mps'  # Default task settings
+        current_incline_R_val = 0; current_speed_R_val = 0
         prev_incline_R = current_incline_R; prev_speed_R = current_speed_R
 
         # Start recording time
@@ -254,20 +278,22 @@ class Controller:
                 side, current_incline, current_speed, avg_loss, update_time, weights, biases = updated_params
                 if side == 'R':
                     self.linear_weights_R = weights;    self.linear_biases_R = biases
-                    current_incline_R = current_incline; current_speed_R = current_speed
+                    # current_incline_R = current_incline; current_speed_R = current_speed
                     avg_loss_R = avg_loss;  update_time_R = update_time
                 elif side == 'L':
                     self.linear_weights_L = weights;    self.linear_biases_L = biases
-                    current_incline_L = current_incline; current_speed_L = current_speed
+                    # current_incline_L = current_incline; current_speed_L = current_speed
                     avg_loss_L = avg_loss;  update_time_L = update_time
 
             # 5. TensorRT inference & Apply linear layer weights and biases
             self.input_q.put((model_input_arr[0, :, :].copy(), model_input_arr[1, :, :].copy()))
             try:
-                model_output_r_val, model_output_l_val = self.output_q.get_nowait()
+                model_output_r_val, model_output_l_val, model_output_r_task, model_output_l_task = self.output_q.get_nowait()
                 last_model_output_r, last_model_output_l = model_output_r_val, model_output_l_val
+                last_model_output_r_task, last_model_output_l_task = model_output_r_task, model_output_l_task
             except mp.queues.Empty:
                 model_output_r_val, model_output_l_val = last_model_output_r, last_model_output_l
+                model_output_r_task, model_output_l_task = last_model_output_r_task, last_model_output_l_task
             
             # Apply linear layer weights and biases
             model_output_r_val = np.dot(model_output_r_val.flatten(), self.linear_weights_R.T)
@@ -300,13 +326,49 @@ class Controller:
             gradual_torque_scale_L = 1 # np.max((1 - avg_loss_L), 0)
             gradual_torque_scale_R = 1 # np.max((1 - avg_loss_R), 0)
 
+            # 6.1 Get the task estimation outputs
+            model_output_r_task_denorm = model_output_r_task * self.label_std_task + self.label_mean_task
+            model_output_l_task_denorm = model_output_l_task * self.label_std_task + self.label_mean_task
+
+            incline_pred_R = model_output_r_task_denorm[0]; incline_pred_L = model_output_l_task_denorm[0]
+            speed_pred_R = model_output_r_task_denorm[1]; speed_pred_L = model_output_l_task_denorm[1]
+
+            incline_pred_history = fast_roll(incline_pred_history); speed_pred_history = fast_roll(speed_pred_history)
+            incline_pred_history[0, -1] = incline_pred_R; incline_pred_history[1, -1] = incline_pred_L
+            speed_pred_history[0, -1] = speed_pred_R; speed_pred_history[1, -1] = speed_pred_L
+
             # 7. Send the torque command to the motors
             if delayed_gait_phase_L < 5:
+                inc_pred_mean = np.mean(incline_pred_history[1, :]); spd_pred_mean = np.mean(speed_pred_history[1, :])
+                # Discretize incline prediction
+                current_incline_L_val = incline_values[np.searchsorted(incline_thresholds, inc_pred_mean)]
+                current_speed_L_val = speed_values[np.searchsorted(speed_thresholds, spd_pred_mean)]
+
+                current_incline_L = incline_keys.get(current_incline_L_val, prev_incline_L)
+                current_speed_L = speed_keys.get(current_speed_L_val, prev_speed_L)
+                if current_incline_L != 'LG' and current_speed_L not in ['0p4mps', '0p6mps', '0p8mps', '1p0mps']:
+                    current_incline_L = prev_incline_L; current_speed_L = prev_speed_L
+                elif current_incline_L == 'RD_10deg' and current_speed_L in ['0p4mps', '0p6mps', '1p2mps']:
+                    current_incline_L = prev_incline_L; current_speed_L = prev_speed_L
+
                 motor_cmd_val_L = self.torque_profile[current_incline_L][current_speed_L][int(delayed_gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_L
                 prev_incline_L = current_incline_L; prev_speed_L = current_speed_L
             else:
                 motor_cmd_val_L = self.torque_profile[prev_incline_L][prev_speed_L][int(delayed_gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_L
+            
             if delayed_gait_phase_R < 5:
+                inc_pred_mean = np.mean(incline_pred_history[0, :]); spd_pred_mean = np.mean(speed_pred_history[0, :])
+                # Discretize incline prediction
+                current_incline_R_val = incline_values[np.searchsorted(incline_thresholds, inc_pred_mean)]
+                current_speed_R_val = speed_values[np.searchsorted(speed_thresholds, spd_pred_mean)]
+
+                current_incline_R = incline_keys.get(current_incline_R_val, prev_incline_R)
+                current_speed_R = speed_keys.get(current_speed_R_val, prev_speed_R)
+                if current_incline_R != 'LG' and current_speed_R not in ['0p4mps', '0p6mps', '0p8mps', '1p0mps']:
+                    current_incline_R = prev_incline_R; current_speed_R = prev_speed_R
+                elif current_incline_R == 'RD_10deg' and current_speed_R in ['0p4mps', '0p6mps', '1p2mps']:
+                    current_incline_R = prev_incline_R; current_speed_R = prev_speed_R
+
                 motor_cmd_val_R = self.torque_profile[current_incline_R][current_speed_R][int(delayed_gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_R
                 prev_incline_R = current_incline_R; prev_speed_R = current_speed_R
             else:
@@ -380,6 +442,14 @@ class Controller:
                 "gyroY_R": local_r_data[4],
                 "gait_phase_L": gait_phase_L,
                 "gait_phase_R": gait_phase_R,
+                "incline_L_cont": incline_pred_L,
+                "incline_R_cont": incline_pred_R,
+                "speed_L_cont": speed_pred_L,
+                "speed_R_cont": speed_pred_R,
+                "incline_L_disc": current_incline_L_val,
+                "incline_R_disc": current_incline_R_val,
+                "speed_L_disc": current_speed_L_val,
+                "speed_R_disc": current_speed_R_val,
                 "cmd_L": motor_cmd_val_L,
                 "cmd_R": motor_cmd_val_R,
                 "update_time_L": update_time_L,

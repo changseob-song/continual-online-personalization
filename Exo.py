@@ -10,9 +10,10 @@ class Exo:
         self.mtr_type = "AK80-9"
         self.control_freq_Hz = 100
         self.frame_length = 100  # Window size (in frames)
+        self.frame_length_task = 100  # Window size for task estimator (in frames)
 
         # biotorque parameters
-        self.scale_factor = 0.15
+        self.scale_factor = 0.20
         self.delay_factor = 0  # Number of frames to delay the torque command
 
         # note: motors zero themselves when actuation.Motors() runs
