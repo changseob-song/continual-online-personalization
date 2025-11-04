@@ -73,8 +73,8 @@ def determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, incli
     combined_rmse_min = float('inf')
     for incline in inclinations_all:
         for speed in speeds_all:
-            if incline != 'LG' and speed not in ['0p4mps', '0p5mps', '0p6mps', '0p7mps', '0p8mps', '0p9mps', '1p0mps']: continue
-            if (incline == 'RD_10deg' or incline == 'RD_7p5deg') and speed in ['0p4mps', '0p5mps', '0p6mps', '0p7mps']: continue
+            if incline != 'LG' and speed not in ['0p4mps', '0p6mps', '0p8mps', '1p0mps']: continue
+            if (incline == 'RD_10deg') and speed in ['0p4mps', '0p6mps']: continue
             for gc in range(2):
                 ab_avg_cycle = ab_avg_input[incline][speed][gc].T[:, 4]  # shape: (n_features, n_samples)
                 # Extract the latest gait cycle from input_data
@@ -100,7 +100,7 @@ def determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, incli
     return best_incline, best_speed, combined_rmse_min
 
 
-def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, hyperparam_config, replay_buffer_ON=False):
+def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, hyperparam_config, adaptation_ON=False, replay_buffer_ON=False):
     """
     This worker process handles the fine-tuning of the model.
     All PyTorch and CUDA initializations happen inside this function.
@@ -143,9 +143,10 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
 
     inclinations_all = ['RD_10deg', 'RD_5deg', 'LG', 'RA_5deg', 'RA_10deg']
     speeds_all = ['0p2mps', '0p4mps', '0p6mps', '0p8mps', '1p0mps', '1p2mps', '1p4mps']
-    bin_state = {inc: {spd: 0 for spd in speeds_all} for inc in inclinations_all}
+    bin_state = {inc: {spd: {side: 0 for side in ['L', 'R']} for spd in speeds_all} for inc in inclinations_all}
     input_stream = {inc: {spd: None for spd in speeds_all} for inc in inclinations_all}
-    train_loader = {inc: {spd: None for spd in speeds_all} for inc in inclinations_all}
+    train_loader = {inc: {spd: {side: None for side in ['L', 'R']} for spd in speeds_all} for inc in inclinations_all}
+    avg_loss = 0
 
     # Main loop to wait for data and fine-tune
     while True:
@@ -167,45 +168,49 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
             #     input_data = interpolate_two_cycles(input_data.T, input_stream[incline][speed].T, weight=0.5)
             #     input_data = input_data.T  # Transpose back to (length, channel num)
 
-            # Prepare data loader for the current task
-            dataset = LoadData(side, incline, speed, input_data, mid_peak_idx, model_path, input_mean, input_std, label_mean, label_std)
-            if not dataset.initilized: continue # Skip if dataset returns nothing
+            if adaptation_ON:
+                # Prepare data loader for the current task
+                dataset = LoadData(side, incline, speed, input_data, mid_peak_idx, model_path, input_mean, input_std, label_mean, label_std)
+                if not dataset.initilized: continue # Skip if dataset returns nothing
 
-            train_indices = list(range(len(dataset)))
-            subset = Subset(dataset, train_indices)
+                train_indices = list(range(len(dataset)))
+                subset = Subset(dataset, train_indices)
 
-            bin_state[incline][speed] = 1
-            input_stream[incline][speed] = input_data
-            train_loader[incline][speed] = DataLoader(subset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True) # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
+                bin_state[incline][speed][side] = 1
+                input_stream[incline][speed] = input_data
+                train_loader[incline][speed][side] = DataLoader(subset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True) # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
 
-            train_loader_combined_list = []
-            sampled_bins = []
-            if replay_buffer_ON:
-                # Get the positive bins excluding the current task
-                positive_bins = [(inc, spd) for inc in inclinations_all for spd in speeds_all if (bin_state[inc][spd] > 0) and not (inc == incline and spd == speed)]
+                train_loader_combined_list = []
+                sampled_bins = []
+                if replay_buffer_ON:
+                    # Get the positive bins excluding the current task
+                    positive_bins = [(inc, spd) for inc in inclinations_all for spd in speeds_all if (bin_state[inc][spd][side] > 0) and not (inc == incline and spd == speed)]
+                    
+                    # Only sample if there are positive bins to sample from
+                    if positive_bins:
+                        num_samples = min(1, len(positive_bins)) # Sample just one & Ensure we don't sample more than available
+                        sampled_bins = random.sample(positive_bins, num_samples)
+                        print(f"Adaptation Worker: Sampling from bins: {sampled_bins}")
+
+                    # Aggregate all train loaders into a single list
+                    for inc, spd in sampled_bins:
+                        # This check is redundant now but safe to keep
+                        if (inc == incline) and (spd == speed): continue
+                        print(f"Adaptation Worker: Including data from {side}-{inc}-{spd} for training. {len(train_loader[inc][spd][side].dataset)} samples.")
+                        train_loader_combined_list.append(train_loader[inc][spd][side])
+
+                    if train_loader_combined_list:
+                        train_loader_combined = torch.utils.data.ConcatDataset([loader.dataset for loader in train_loader_combined_list])
+                        # if side == 'R':
+                            # print(f"Adaptation Worker: Total training samples combined: {len(train_loader_combined)}")
+                        train_loader_combined = DataLoader(train_loader_combined, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
+                    else:
+                        train_loader_combined = train_loader[incline][speed][side]
                 
-                # Only sample if there are positive bins to sample from
-                if positive_bins:
-                    num_samples = min(1, len(positive_bins)) # Sample just one & Ensure we don't sample more than available
-                    sampled_bins = random.sample(positive_bins, num_samples)
-                    print(f"Adaptation Worker: Sampling from bins: {sampled_bins}")
+                elif not replay_buffer_ON: # No replay buffer, only use current task (double epochs)
+                    train_loader_combined = train_loader[incline][speed][side]
 
-                # Aggregate all train loaders into a single list
-                for inc, spd in sampled_bins:
-                    # This check is redundant now but safe to keep
-                    if (inc == incline) and (spd == speed): continue 
-                    if bin_state[inc][spd] == 1:
-                        print(f"Adaptation Worker: Including data from {side}-{inc}-{spd} for training. {len(train_loader[inc][spd].dataset)} samples.")
-                        train_loader_combined_list.append(train_loader[inc][spd])
-
-                if train_loader_combined_list:
-                    train_loader_combined = torch.utils.data.ConcatDataset([loader.dataset for loader in train_loader_combined_list])
-                    # if side == 'R':
-                        # print(f"Adaptation Worker: Total training samples combined: {len(train_loader_combined)}")
-                    train_loader_combined = DataLoader(train_loader_combined, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
-
-            # Training loop - other tasks that is already in the buffer
-            if train_loader_combined_list:
+                # Training loop - other tasks that is already in the buffer
                 for input_batch, label_batch in train_loader_combined:
                     input_batch = input_batch.to(device)
                     label_batch = label_batch.to(device)
@@ -217,23 +222,23 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
                     loss.backward()
                     optimizer.step()
 
-            # Training loop - current task
-            tloss = 0
-            num_batches = 0
-            for input_batch, label_batch in train_loader[incline][speed]:
-                input_batch = input_batch.to(device)
-                label_batch = label_batch.to(device)
-                
-                optimizer.zero_grad()
-                logits = model(input_batch)
-                loss = criterion(logits, label_batch)
+                # Training loop - current task
+                tloss = 0
+                num_batches = 0
+                for input_batch, label_batch in train_loader[incline][speed][side]:
+                    input_batch = input_batch.to(device)
+                    label_batch = label_batch.to(device)
+                    
+                    optimizer.zero_grad()
+                    logits = model(input_batch)
+                    loss = criterion(logits, label_batch)
 
-                loss.backward()
-                optimizer.step()
-                tloss += loss.item()
-                num_batches += 1
+                    loss.backward()
+                    optimizer.step()
+                    tloss += loss.item()
+                    num_batches += 1
 
-            avg_loss = tloss / num_batches if num_batches > 0 else 0
+                avg_loss = tloss / num_batches if num_batches > 0 else 0
             # print("avg loss: ", avg_loss)
 
             # After training, get the updated weights and send them back
@@ -253,16 +258,18 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
 
 
 class OnlineAdaptator():
-    def __init__(self, model_path, ab_avg_input_path, replay_buffer_ON=False):
+    def __init__(self, model_path, ab_avg_input_path, adaptation_ON=False, replay_buffer_ON=False):
         self.model_path = model_path
         self.ab_avg_input_path = ab_avg_input_path
         self.input_q = mp.Queue()
         self.output_q = mp.Queue()
+        self.adaptation_ON = adaptation_ON
+        self.replay_buffer_ON = replay_buffer_ON
 
         # Start the new standalone worker process
         self.adaptation_process = mp.Process(
-            target=adaptation_worker_process, 
-            args=(self.input_q, self.output_q, self.model_path, self.ab_avg_input_path, hyperparam_config, replay_buffer_ON)
+            target=adaptation_worker_process,
+            args=(self.input_q, self.output_q, self.model_path, self.ab_avg_input_path, hyperparam_config, self.adaptation_ON, self.replay_buffer_ON)
         )
         self.adaptation_process.start()
 

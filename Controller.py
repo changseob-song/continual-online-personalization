@@ -13,7 +13,7 @@ from scipy.signal import find_peaks
 class Controller:
     def __init__(self, pt_model_path, trt_engine_path, torque_profile_path, ab_avg_input_path,
                  trigger_type, trial_name, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
-                 replay_buffer_ON):
+                 adaptation_ON=False, replay_buffer_ON=False):
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
         self.trt_engine_path = trt_engine_path
@@ -24,6 +24,7 @@ class Controller:
         self.pulse_after_start = pulse_after_start
         self.trial_dur_sec = trial_dur_sec
         self.adjustment_duration = adjustment_duration
+        self.adaptation_ON = adaptation_ON
         self.replay_buffer_ON = replay_buffer_ON
         self.last_used_peak_idx_L = 0
         self.last_used_peak_idx_R = 0
@@ -88,9 +89,9 @@ class Controller:
         self.linear_biases_L = self.linear_biases_R.copy()
 
         # Initialize OnlineAdaptator
-        self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.ab_avg_input_path, self.replay_buffer_ON)
+        self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.ab_avg_input_path, self.adaptation_ON, self.replay_buffer_ON)
 
-    def run_loop(self, Exo_ON=False, adaptation_ON=False):
+    def run_loop(self, Exo_ON=False):
 
         # Setting for the exiting process
         atexit.register(lambda: (cleanup_can(self.Exo.bus, self.Exo.notifier), self.GPIO_control.safe_gpio_cleanup()))
@@ -190,7 +191,7 @@ class Controller:
             model_input_arr[0, :, -1] = right_data_norm; model_input_arr[1, :, -1] = left_data_norm
 
             # 4.1 Prepare the input data for online adaptation
-            if first_pulse_sent and adaptation_ON:
+            if first_pulse_sent:
 
                 input_stream_data = fast_roll(input_stream_data)
                 input_stream_data[0, :, -1] = right_data; input_stream_data[1, :, -1] = left_data
@@ -204,9 +205,9 @@ class Controller:
                 recent_pos_L = self.data_to_save['mtr_pos_L'][search_start_idx:loop_index]
                 recent_pos_R = self.data_to_save['mtr_pos_R'][search_start_idx:loop_index]
 
-                peak_indices_L, _ = find_peaks(-recent_pos_L, height=None, distance=15, prominence=10)
+                peak_indices_L, _ = find_peaks(-recent_pos_L, height=None, distance=40, prominence=15)
                 peak_indices_L += search_start_idx # This makes the indices back to absolute timeframe
-                peak_indices_R, _ = find_peaks(-recent_pos_R, height=None, distance=15, prominence=10)
+                peak_indices_R, _ = find_peaks(-recent_pos_R, height=None, distance=40, prominence=15)
                 peak_indices_R += search_start_idx
                 
                 buffer_start_abs = loop_index - len(input_stream_data[0, 0, :])
@@ -234,7 +235,7 @@ class Controller:
                     if len(peak_indices_L) > update_freq_gc:
                         # Get the absolute start and end indices for the data slice
                         start_idx_abs = peak_indices_L[0]; end_idx_abs = peak_indices_L[-1]
-                        # print('\nL', start_idx_abs, peak_indices_L[-2], end_idx_abs)
+                        print('\nL', start_idx_abs, peak_indices_L[-2], end_idx_abs)
                         mid_peak_idx_rel = peak_indices_L[1:-1] - start_idx_abs # This is relative about start_idx_abs
 
                         # Slice the data from the input stream buffer
@@ -320,10 +321,10 @@ class Controller:
 
             if Exo_ON == False: motor_cmd_val_L, motor_cmd_val_R = 0.0, 0.0 # use this for Exo off condition
 
-            if motor_cmd_val_L > 10:    motor_cmd_val_L = 10
-            elif motor_cmd_val_L < -10: motor_cmd_val_L = -10
-            if motor_cmd_val_R > 10:    motor_cmd_val_R = 10
-            elif motor_cmd_val_R < -10: motor_cmd_val_R = -10
+            if motor_cmd_val_L > 8:    motor_cmd_val_L = 8
+            elif motor_cmd_val_L < -8: motor_cmd_val_L = -8
+            if motor_cmd_val_R > 8:    motor_cmd_val_R = 8
+            elif motor_cmd_val_R < -8: motor_cmd_val_R = -8
 
             self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_L, motor_cmd_val_L) 
             self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, -motor_cmd_val_R) # Negative sign because the motor is mounted in reverse direction
@@ -373,16 +374,16 @@ class Controller:
 
             # 10. Send telemetry data
             telemetry_data = {
-                "pos_R": current_pos_R,
                 "pos_L": current_pos_L,
-                "gyroY_R": local_r_data[4],
+                "pos_R": current_pos_R,
                 "gyroY_L": local_l_data[4],
-                "cmd_R": motor_cmd_val_R,
-                "cmd_L": motor_cmd_val_L,
-                "gait_phase_R": gait_phase_R,
+                "gyroY_R": local_r_data[4],
                 "gait_phase_L": gait_phase_L,
-                "update_time_R": update_time_R,
+                "gait_phase_R": gait_phase_R,
+                "cmd_L": motor_cmd_val_L,
+                "cmd_R": motor_cmd_val_R,
                 "update_time_L": update_time_L,
+                "update_time_R": update_time_R,
                 "loop_time_exceeded": loop_time_exceeded,
             }
             self.teleplot.sendBatchTelemetry(telemetry_data)
