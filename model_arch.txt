@@ -4,7 +4,7 @@ TCNModel(
       (0): TemporalBlock(
         (network): Sequential(
           (0): ConstantPad1d(padding=(4, 0), value=0)
-          (1): Conv1d(22, 50, kernel_size=(5,), stride=(1,))
+          (1): Conv1d(14, 50, kernel_size=(5,), stride=(1,))
           (2): ReLU()
           (3): Dropout(p=0.15, inplace=False)
           (4): ConstantPad1d(padding=(4, 0), value=0)
@@ -12,7 +12,7 @@ TCNModel(
           (6): ReLU()
           (7): Dropout(p=0.15, inplace=False)
         )
-        (downsample): Conv1d(22, 50, kernel_size=(1,), stride=(1,))
+        (downsample): Conv1d(14, 50, kernel_size=(1,), stride=(1,))
         (relu): ReLU()
       )
       (1): TemporalBlock(
@@ -69,5 +69,5 @@ TCNModel(
       )
     )
   )
-  (linear): Linear(in_features=50, out_features=2, bias=True)
+  (linear): Linear(in_features=50, out_features=1, bias=True)
 )

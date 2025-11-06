@@ -1,11 +1,10 @@
-# ICORR_TCN_Training.py
 import torch
 import os
 import wandb
 
-from TCN_Header_Model import TCNModel
-from TCN_Header_Dataloader import DataHandler
-from TCN_Header_Trainer import Trainer
+from Model import TCN
+from Dataloader import DataHandler
+from Trainer import Trainer
 
 
 use_sweep = False  # Set to True to run sweep, False for single run
@@ -17,38 +16,43 @@ sweep_config = {
         'goal': 'minimize'
     },
     'parameters': {
-        'dataset_proportion': {'values': [0.01, 0.02, 0.04, 0.06, 0.08, 0.10, 0.12, 0.14, 0.16, 0.18, 0.2]},
-    }
+        'batch_size': {'values': [8, 16, 32, 64, 128]}, # Different batch sizes for TCN
+    } # NOTE: change the save_sub_dir to save results in different directories
 }
 
 # Base hyperparameters
 hyperparam_config = {
-    'wandb_project_name': 'Biotorque_initial',
-    'wandb_session_name': 'bilateral_to_unilateral_wo_pelvis_test',
-    'input_size': 14, # 12 for IMU (right, left), 2 for hip angle and velocity
-    'output_size': 1, # 1 for right hip torque
+    'wandb_project_name': 'online_adaptation-GPE',
+    'wandb_session_name': 'hyperparam_optimized-input_modality_6',  # sweep-, 2. SK, 3. AB+SK
+    'input_size': 6, # 12 for IMU (Pelvis, one thigh), 2 for hip angle and velocity
+    'output_size': 2, # 2 for polar coordinates (x, y) of gait cycle
     'architecture': 'TCN',
     
     'transfer_learning': False,
-    'dataset_proportion': 1, # dataset proportion for training
+    'dataset_proportion': 1.0, # dataset proportion for training
     
     'epochs': 30,
-    'batch_size': 32,
-    'init_lr': 5e-4,
-    'dropout': 0.15,
     'validation_split': 0.1,
-    'window_size': 95,
     'number_of_layers': 2,
-    'num_channels': [50, 50, 50, 50, 50],
-    'kernel_size': 5,
     'dilations': [1, 2, 4, 8, 16],
-    'number_of_workers': 10
+
+    'window_size': 100,
+    'num_channels': [80, 80, 80, 80, 80],
+    'kernel_size': 5,
+    'dropout': 0.05,
+    'init_lr': 5e-6,
+    'batch_size': 16,
+
+    'number_of_workers': 10,
 }
 
 def train():
-
-    # Initialize wandb run with hyperparameters
-    wandb_run = wandb.init(config=hyperparam_config, project=hyperparam_config['wandb_project_name'], name=hyperparam_config['wandb_session_name'])
+    # wandb login
+    os.environ["WANDB_API_KEY"] = "9d7294877630de627f0413ca39aebd4c9a387e50"
+    if use_sweep:
+        wandb_run = wandb.init(config=hyperparam_config, name=hyperparam_config['wandb_session_name'])
+    else:
+        wandb_run = wandb.init(config=hyperparam_config, project=hyperparam_config['wandb_project_name'], name=hyperparam_config['wandb_session_name'])
 
     # Access wandb.config after initializing wandb
     config = wandb.config
@@ -60,27 +64,33 @@ def train():
     hyperparam_config.update(dict(config))
 
     # Create directory for results & plots
-    save_dir = '/home/metamobility3/Changseob/biotorque/in-lab_version/training_result'
-    save_sub_dir = hyperparam_config['wandb_session_name']  # 1. AB, 2. SK, 3. AB+SK
+    save_dir = '/home/metamobility5/Changseob/proj-online_adaptation_GPE/training_results'
+
+    if use_sweep:
+        sweep_target_param = list(sweep_config['parameters'].keys())[0]
+        save_sub_dir = f"{hyperparam_config['wandb_session_name']}_{sweep_target_param}_{config[sweep_target_param]}"
+    else:
+        save_sub_dir = hyperparam_config['wandb_session_name']
+
     save_dir = os.path.join(save_dir, save_sub_dir)
     os.makedirs(save_dir, exist_ok=True)
 
     # Model Initialization
-    model = TCNModel(hyperparam_config).to(device)
+    model = TCN(hyperparam_config).to(device)
     
     # Load pretrained model if transfer learning is enabled
     if hyperparam_config['transfer_learning']:
-        pretrained_model_path = '/home/metamobility/Changseob/Initial_Project/ICORR_2025_TCN/results/trained_model/AB'
-        model.load_state_dict(torch.load(os.path.join(pretrained_model_path, 'AB_model.pt'), map_location=device))
+        pretrained_model_path = '/home/metamobility5/Changseob/biotorque/training_result/baseline_TCN'
+        model.load_state_dict(torch.load(os.path.join(pretrained_model_path, 'baseline_TCN.pt'), map_location=device))
         print("\nPretrained model loaded: ", pretrained_model_path)
-        # #Freeze the TCN part of the model
-        # for param in model.tcn.parameters():
-        #     param.requires_grad = False
+        #Freeze the TCN part of the model
+        for param in model.tcn.parameters():
+            param.requires_grad = False
     else:
         pretrained_model_path = None
 
     # Initialize DataHandler
-    data_root = '/home/metamobility3/Changseob/biotorque/in-lab_version/biotorque_ten_subjects'
+    data_root = '/home/metamobility5/Changseob/dataset-MeMo/Synced_LGRARD'
     data_handler = DataHandler(data_root, hyperparam_config, pretrained_model_path)
     data_handler.load_data(
         train_data_partition=[
@@ -92,21 +102,24 @@ def train():
                         # 'AB06_Vaidehi',
                         'AB07_Leo',
                         'AB08_Adrian',
-                        'AB09_Crystal',
+                        # 'AB09_Crystal',
+                        # 'AB10_Pragya',
+                        'AB11_Ryan',
+                        'AB12_Ray',
+                        'AB13_Hridayam',
+                        'AB14_Evy',
+        ],
+        train_data_condition=[
+                        # '0mps', 
+                        '0p2mps', '0p4mps', '0p6mps', '0p8mps', '1p0mps', '1p2mps', '1p4mps', #'transient_15sec', 'transient_30sec',
         ],
         test_data_partition=[
-                        # 'AB01_Jimin',
-                        # 'AB02_Rajiv',
-                        # 'AB03_Amy',
-                        # 'AB04_Changseob',
-                        # 'AB05_Maria',
-                        'AB06_Vaidehi',
-                        # 'AB07_Leo',
-                        # 'AB08_Adrian',
-                        # 'AB09_Crystal',
-                        # "AB06_Vaidehi_test",
-                        # 'PT01_Changseob'
+                        'AB01_Jimin'
         ],
+        test_data_condition=[
+                        #'0mps',
+                        '0p2mps', '0p4mps', '0p6mps', '0p8mps', '1p0mps', '1p2mps', '1p4mps', #'transient_15sec', 'transient_30sec',
+        ]
     )
     data_handler.save_mean_std(save_dir)
 
@@ -130,7 +143,7 @@ def train():
     wandb_run.finish()
 
 if __name__ == '__main__':
-    
+    wandb.login(key="9d7294877630de627f0413ca39aebd4c9a387e50")
     if use_sweep:
         # Initialize the sweep
         sweep_id = wandb.sweep(sweep_config, project= hyperparam_config['wandb_project_name'])

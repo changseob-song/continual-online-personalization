@@ -5,6 +5,7 @@ import pandas as pd
 from scipy import signal
 import torch
 from torch.utils.data import Subset
+from scipy.signal import find_peaks
 
 class DataHandler:
     def __init__(self, data_root, hyperparam_config, pretrained_model_path=None):
@@ -34,14 +35,15 @@ class DataHandler:
             self.input_std = np.load(os.path.join(self.pretrained_model_path, 'input_std.npy'))
             self.label_mean = np.load(os.path.join(self.pretrained_model_path, 'label_mean.npy'))
             self.label_std = np.load(os.path.join(self.pretrained_model_path, 'label_std.npy'))
-        
-    def load_data(self, train_data_partition, test_data_partition, test_data_partition_2=None, test_data_partition_3=None):
+
+    def load_data(self, train_data_partition, train_data_condition, test_data_partition, test_data_condition):
 
         # Load training data (including data for validation split)
         print("\n...Loading training data...\n")        
         self.train_data = LoadData(
             root=self.data_root,
             partitions= train_data_partition,
+            conditions= train_data_condition,
             window_size=self.window_size,
             data_type = "train_data" if self.transfer_learning == False else "train_data_tranfer_learning",
             dataset_proportion=self.dataset_proportion,
@@ -50,7 +52,7 @@ class DataHandler:
             label_mean= self.label_mean,
             label_std= self.label_std
         )
-        
+
         # Retrieve mean and std from training data
         self.input_mean = self.train_data.input_mean
         self.input_std = self.train_data.input_std
@@ -62,6 +64,7 @@ class DataHandler:
         self.test_data = LoadData(
             root=self.data_root,
             partitions= test_data_partition,
+            conditions= test_data_condition,  # Use the same conditions as training data
             window_size=self.window_size,
             data_type = "test_data",
             dataset_proportion=self.dataset_proportion
@@ -142,7 +145,7 @@ class DataHandler:
 
 # Dataset class to load data
 class LoadData(torch.utils.data.Dataset):
-    def __init__(self, root, partitions, window_size, data_type, dataset_proportion=None, input_mean=None, input_std=None, label_mean=None, label_std=None, normalize = True):
+    def __init__(self, root, partitions, conditions, window_size, data_type, dataset_proportion=None, input_mean=None, input_std=None, label_mean=None, label_std=None, normalize = True):
         self.window_size = window_size
         self.input_list = []
         self.label_list = []
@@ -153,23 +156,12 @@ class LoadData(torch.utils.data.Dataset):
 
         for subject_num, subject in enumerate(partitions):  # Multiple partitions
             self.subject_data_length.append(0) # Append 0 for each subject
-            subject_path = os.path.join(root, subject)
-            if not os.path.isdir(subject_path): continue # Skip if not a directory
-
-            for condition in os.listdir(subject_path):
-                condition_path = os.path.join(subject_path, condition)
-                if not os.path.isdir(condition_path): continue # Skip if not a directory
-
-                for trial in os.listdir(condition_path):
-                    trial_path = os.path.join(condition_path, trial)
-                    if not os.path.isdir(trial_path): continue # Skip if not a directory
-
-                    input_file_dir = os.path.join(trial_path, 'Input')
-                    label_file_dir = os.path.join(trial_path, 'Label')
+            for task in os.listdir(os.path.join(root, subject)):
+                task_path = os.path.join(root, subject, task)
+                
+                def process_trial_data(input_file_dir, label_file_dir):
                     input_file_names = sorted(os.listdir(input_file_dir))
                     label_file_names = sorted(os.listdir(label_file_dir))
-
-                    print("\n", subject, condition, trial)
 
                     # Load and concatenate all input data files
                     input_buffer_R = None
@@ -184,56 +176,56 @@ class LoadData(torch.utils.data.Dataset):
                             input_df_R = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
                                 # 'Pelvis_Acc_X', 'Pelvis_Acc_Y', 'Pelvis_Acc_Z', 'Pelvis_Gyr_X', 'Pelvis_Gyr_Y', 'Pelvis_Gyr_Z',
                                 'Thigh_R_Acc_X', 'Thigh_R_Acc_Y', 'Thigh_R_Acc_Z', 'Thigh_R_Gyr_X', 'Thigh_R_Gyr_Y', 'Thigh_R_Gyr_Z',
-                                'Thigh_L_Acc_X', 'Thigh_L_Acc_Y', 'Thigh_L_Acc_Z', 'Thigh_L_Gyr_X', 'Thigh_L_Gyr_Y', 'Thigh_L_Gyr_Z'
+                                # 'Thigh_L_Acc_X', 'Thigh_L_Acc_Y', 'Thigh_L_Acc_Z', 'Thigh_L_Gyr_X', 'Thigh_L_Gyr_Y', 'Thigh_L_Gyr_Z' # for bilateral input to unilateral output
                                 ]].values
                             # Left side
                             input_df_L = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
                                 # 'Pelvis_Acc_X', 'Pelvis_Acc_Y', 'Pelvis_Acc_Z', 'Pelvis_Gyr_X', 'Pelvis_Gyr_Y', 'Pelvis_Gyr_Z',
                                 'Thigh_L_Acc_X', 'Thigh_L_Acc_Y', 'Thigh_L_Acc_Z', 'Thigh_L_Gyr_X', 'Thigh_L_Gyr_Y', 'Thigh_L_Gyr_Z',
-                                'Thigh_R_Acc_X', 'Thigh_R_Acc_Y', 'Thigh_R_Acc_Z', 'Thigh_R_Gyr_X', 'Thigh_R_Gyr_Y', 'Thigh_R_Gyr_Z'
+                                # 'Thigh_R_Acc_X', 'Thigh_R_Acc_Y', 'Thigh_R_Acc_Z', 'Thigh_R_Gyr_X', 'Thigh_R_Gyr_Y', 'Thigh_R_Gyr_Z'  # for unilateral input to unilateral output
                                 ]].values
                             # Left side: Flip the signs of 
                                 # Pelvis_Acc_Y, Pelvis_Gyr_X, Pelvis_Gyr_Z, 
                                 # Thigh_L_Acc_Y, Thigh_L_Gyr_X, Thigh_L_Gyr_Z,
-                                # Thigh_R_Acc_Y, Thigh_R_Gyr_X, Thigh_R_Gyr_Z
-                            # input_df_L[:, [1, 3, 5, 7, 9, 11, 13, 15, 17]] *= -1
-                            input_df_L[:, [1, 3, 5, 7, 9, 11]] *= -1 # When only using Thigh IMU
+                            # input_df_L[:, [1, 3, 5, 7, 9, 11]] *= -1
+                            input_df_L[:, [1, 3, 5]] *= -1 # When only using Thigh IMU
 
                         # Extract motor data from input file
                         elif 'motor' in name.lower():
                             # Right side
                             input_df_R = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
-                                'mtr_pos_R', 'mtr_vel_R'
+                                'mtr_pos_R', #'mtr_vel_R'
                                 ]].values
                             # Left side
                             input_df_L = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
-                                'mtr_pos_L', 'mtr_vel_L'
+                                'mtr_pos_L', #'mtr_vel_L'
                                 ]].values
-                            # Left side: Flip the signs of mtr_pos_L, mtr_vel_L
-                            input_df_L[:, [0, 1]] *= -1
+                            # Flip the signs of mtr_pos_R, mtr_vel_R to make flexion positive
+                            input_df_R[:, [0]] *= -1 # NOTE: this is only for hip angle
 
-                        # Horizontally stack all input data
+                            # Find extension peaks (local minima) by inverting the signal
+                            peak_indices_R, _ = find_peaks(-input_df_R[:,0], height= None, distance=15, prominence=10)
+                            peak_indices_L, _ = find_peaks(-input_df_L[:,0], height= None, distance=15, prominence=10)
+
+                            input_df_R, input_df_L = None, None  # Free up memory, for 6 input size
+
+                            if peak_indices_R.shape[0] == 0 or peak_indices_L.shape[0] == 0:
+                                print(f"Warning: No peaks detected in {name}. Skipping this file.")
+                                continue
+                        
+                        # # Horizontally stack all input data
                         if input_buffer_R is None:    input_buffer_R = input_df_R
-                        else:   input_buffer_R = np.hstack((input_buffer_R, input_df_R))
+                        # else:   input_buffer_R = np.hstack((input_buffer_R, input_df_R))
                         if input_buffer_L is None:    input_buffer_L = input_df_L
-                        else:   input_buffer_L = np.hstack((input_buffer_L, input_df_L))
-                        print(f"\tinput file {i+1} loaded: ", name)
-
-                    # Segment train data and test data based on dataset_proportion
-                    # Don't need to care for user-independent model training)
-                    input_time_sec = int(input_buffer_R.shape[0]/100) # Extract recording time from input file by dividing 100 Hz
-                    if self.data_type == "train_data":
-                        input_buffer_R = input_buffer_R[:int(input_buffer_R.shape[0]* self.dataset_proportion), :] # Use (dataset_proportion)% of the data for training
-                        input_buffer_L = input_buffer_L[:int(input_buffer_L.shape[0]* self.dataset_proportion), :]
-                    elif self.data_type == "train_data_tranfer_learning":
-                        input_buffer_R = input_buffer_R[:int(input_buffer_R.shape[0]* self.dataset_proportion), :]
-                        input_buffer_L = input_buffer_L[:int(input_buffer_L.shape[0]* self.dataset_proportion), :]
-                    elif self.data_type == "test_data":
-                        input_buffer_R = input_buffer_R[:int(input_buffer_R.shape[0]* self.dataset_proportion), :] # Use 10% of the data for testing
-                        input_buffer_L = input_buffer_L[:int(input_buffer_L.shape[0]* self.dataset_proportion), :]
+                        # else:   input_buffer_L = np.hstack((input_buffer_L, input_df_L))
+                        
+                    # # Use only the data between the first and last peaks
+                    input_buffer_R = input_buffer_R[peak_indices_R[0]:peak_indices_R[-1], :] 
+                    input_buffer_L = input_buffer_L[peak_indices_L[0]:peak_indices_L[-1], :]
                     
                     # Randomly select right or left side as the first column
                     R_side_first = np.random.randint(0, 2)
+
                     if R_side_first == True:
                         input_buffer = np.vstack((input_buffer_R, input_buffer_L))
                     else:
@@ -241,24 +233,10 @@ class LoadData(torch.utils.data.Dataset):
 
                     self.input_list.append(input_buffer)
                     self.subject_data_length[subject_num] += input_buffer.shape[0]
-                    
+
                     # Load and label data file (Vicon data)
-                    label_buffer = self.load_vicon_hip_moment_data(label_file_dir, label_file_names[0], input_time_sec) # Extract recording time from input file by dividing 100 Hz
-                    print(f"\tlabel file loaded: ", label_file_names)
-
-                    label_buffer_R = label_buffer[:, 0].reshape(-1, 1) # Right hip moment
-                    label_buffer_L = label_buffer[:, 1].reshape(-1, 1) # Left hip moment
-
-                    # Segment train data and test data based on dataset_proportion
-                    if self.data_type == "train_data":
-                        label_buffer_R = label_buffer_R[:int(label_buffer_R.shape[0]* self.dataset_proportion), :] # Use (dataset_proportion)% of the data for training
-                        label_buffer_L = label_buffer_L[:int(label_buffer_L.shape[0]* self.dataset_proportion), :]
-                    elif self.data_type == "train_data_tranfer_learning":
-                        label_buffer_R = label_buffer_R[:int(label_buffer_R.shape[0]* self.dataset_proportion), :]
-                        label_buffer_L = label_buffer_L[:int(label_buffer_L.shape[0]* self.dataset_proportion), :]
-                    elif self.data_type == "test_data":
-                        label_buffer_R = label_buffer_R[:int(label_buffer_R.shape[0]* self.dataset_proportion), :] # Use 10% of the data for testing
-                        label_buffer_L = label_buffer_L[:int(label_buffer_L.shape[0]* self.dataset_proportion), :]
+                    label_buffer_R = self.gait_cycle_generator(peak_indices_R)
+                    label_buffer_L = self.gait_cycle_generator(peak_indices_L)
                     
                     # Randomly select right or left side as the first column
                     if R_side_first == True:
@@ -267,9 +245,23 @@ class LoadData(torch.utils.data.Dataset):
                         label_buffer = np.vstack((label_buffer_L, label_buffer_R))
 
                     self.label_list.append(label_buffer)
-            
-            print("\nsubject data legnth: ", self.subject_data_length[subject_num])
 
+                for speed in os.listdir(task_path):
+                    if speed not in conditions:
+                        continue
+                    if task != 'LG' and speed not in ['0p4mps', '0p6mps', '0p8mps', '1p0mps']:
+                        continue
+                    if task == 'RD_10deg' and speed in ['0p4mps', '0p6mps']:
+                        continue
+                    print(f"\tLoading -Task: {task}, Condition: {speed}")
+                    speed_path = os.path.join(task_path, speed)
+                    for trial in os.listdir(speed_path):
+                        input_file_dir = os.path.join(speed_path, trial, 'Input')
+                        label_file_dir = os.path.join(speed_path, trial, 'Label')
+                        process_trial_data(input_file_dir, label_file_dir)   
+            
+            print(f"{subject} data length: ", self.subject_data_length[subject_num])
+        
         # Concatenate all data
         self.input = np.concatenate(self.input_list, axis=0)
         self.label = np.concatenate(self.label_list, axis=0)
@@ -279,7 +271,6 @@ class LoadData(torch.utils.data.Dataset):
 
         self.length = len(self.input) - self.window_size + 1
         print(f"Total {self.data_type} sequences: ", self.length)
-
         # Calculate mean and std using the entire dataset
         self.input_mean = np.mean(self.input, axis=0)
         self.input_std = np.std(self.input, axis=0) + 1e-8
@@ -297,40 +288,24 @@ class LoadData(torch.utils.data.Dataset):
         if label_std is not None:
             self.label_std = label_std
 
-    def load_vicon_hip_moment_data(self, label_file_dir, label_file_name, record_time_sec):
-        output_df = pd.read_csv(os.path.join(label_file_dir, label_file_name),
-                              delimiter=',',
-                              skiprows=lambda x: x in range(0, record_time_sec*1000 + 10), # skip force plate data and 10 rows of header
-                              encoding_errors='ignore') # Add this line to ignore encoding errors
-        output_df = output_df.fillna(0) # fill NaN with 0
-        output_buffer = output_df.values[:, [54, 6]]/1000 # 54 for right hip, 6 for left hip, divide by 1000 to convert to Nm
-        output_buffer[:, 1] *= -1 # Flip the sign of left hip moment
-        output_buffer = self.lowpass_filter(output_buffer, order=4, cutoff_freq=6, sampling_freq=100)
-        return output_buffer
+    def gait_cycle_generator(self, peak_indices):
+        """
+        Generate gait cycles based on detected peaks.
+        """
+        gc_polar_x_list = []
+        gc_polar_y_list = []
 
-    def lowpass_filter(self, data, order=4, cutoff_freq=6, sampling_freq=100):
-        """
-        Parameters:
-        data: numpy array of shape (n_samples, n_features)
-        order: filter order (default=4)
-        cutoff_freq: cutoff frequency in Hz (default=6)
-        sampling_freq: sampling frequency in Hz (default=100)
-        """
-        nyquist_freq = sampling_freq / 2
-        normalized_cutoff_freq = cutoff_freq / nyquist_freq
-        
-        # Create the filter coefficients
-        b, a = signal.butter(order, normalized_cutoff_freq, btype='low')
-        
-        # Initialize filtered data array
-        filtered_data = np.zeros_like(data)
-        filtered_data[:, 0] = data[:, 0]  # Keep the time column as is
-        
-        # Apply filter to each column
-        for i in range(0, data.shape[1]):
-            filtered_data[:, i] = signal.filtfilt(b, a, data[:, i])
-        
-        return filtered_data
+        for i in range(len(peak_indices) - 1):
+            start = peak_indices[i]
+            end = peak_indices[i + 1]
+
+            for j in range(start, end):
+                gc_polar_angle = (j - start) / (end - start) * 2 * np.pi
+                gc_polar_x_list.append(np.cos(gc_polar_angle))
+                gc_polar_y_list.append(np.sin(gc_polar_angle))
+
+        # Return as a (N, 2) numpy array for stacking
+        return np.column_stack((gc_polar_x_list, gc_polar_y_list))
 
     def __len__(self):
         return self.length
