@@ -10,7 +10,7 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting'
-    trial_name = 'outdoor_pilot-Changseob-adapted'
+    trial_name = 'test-Changseob-adapted'
     pulse_after_start = 0  # seconds
     trial_dur_sec = 60*1 #15*2  # seconds
     adjustment_duration = 10  # seconds
