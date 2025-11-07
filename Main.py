@@ -10,12 +10,12 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting'
-    trial_name = 'ml_congruency-Changseob-LG'
+    trial_name = 'outdoor_pilot-Changseob-adapted'
     pulse_after_start = 0  # seconds
-    trial_dur_sec = 15*7  # seconds
+    trial_dur_sec = 60*1 #15*2  # seconds
     adjustment_duration = 10  # seconds
     exo_ON = True
-    adaptation_ON = True
+    adaptation_ON = False
     replay_buffer_ON = False
 
     # Trigger setting
@@ -26,18 +26,16 @@ if __name__ == '__main__':
 
     # Model path
     # tcn_only
-    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/hyperparam_optimized-input_modality_6/hyperparam_optimized-input_modality_6_tcn.trt'
+    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-test/heel_strike-test_tcn.trt'
     # entire model (TCN + linear layer)
-    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/hyperparam_optimized-input_modality_6/hyperparam_optimized-input_modality_6.pt'
+    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-test/heel_strike-test.pt'
     # task estimator path
     trt_task_estimator_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/task_estimator-input_modality_6_window_size_100/task_estimator-input_modality_6.trt'
     # torque profile path
     torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE/torque_splines.pkl'
-    # AB average input path
-    ab_avg_input_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE/ab_avg_input.pkl'
-
+    
     # Initialize Control loop class
-    controller = Controller(pt_model_path, trt_engine_path, trt_task_estimator_path, torque_profile_path, ab_avg_input_path,
+    controller = Controller(pt_model_path, trt_engine_path, trt_task_estimator_path, torque_profile_path,
                             trigger_type, trial_name,
                             pulse_after_start, trial_dur_sec, adjustment_duration,
                             body_mass_kg,

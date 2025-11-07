@@ -11,14 +11,13 @@ from Exo import Exo
 from scipy.signal import find_peaks
 
 class Controller:
-    def __init__(self, pt_model_path, trt_engine_path, trt_task_estimator_path, torque_profile_path, ab_avg_input_path,
+    def __init__(self, pt_model_path, trt_engine_path, trt_task_estimator_path, torque_profile_path,
                  trigger_type, trial_name, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
                  adaptation_ON=False, replay_buffer_ON=False):
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
         self.trt_engine_path = trt_engine_path
         self.trt_task_estimator_path = trt_task_estimator_path
-        self.ab_avg_input_path = ab_avg_input_path
         self.trigger_type = trigger_type
         self.trial_name = trial_name
         self.body_mass_kg = body_mass_kg
@@ -100,7 +99,7 @@ class Controller:
         self.linear_biases_L = self.linear_biases_R.copy()
 
         # Initialize OnlineAdaptator
-        self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.ab_avg_input_path, self.adaptation_ON, self.replay_buffer_ON)
+        self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.adaptation_ON, self.replay_buffer_ON)
 
     def run_loop(self, Exo_ON=False):
 
@@ -130,12 +129,11 @@ class Controller:
         model_output_r_val = last_model_output_r; model_output_l_val = last_model_output_l
         model_output_r_task = last_model_output_r_task; model_output_l_task = last_model_output_l_task
 
-        incline_keys = {-10: "RD_10deg", -5: "RD_5deg", 0: "LG", 5: "RA_5deg", 10: "RA_10deg"}
-        speed_keys = {0.2: "0p2mps", 0.4: "0p4mps", 0.6: "0p6mps", 0.8: "0p8mps", 1.0: "1p0mps", 1.2: "1p2mps", 1.4: "1p4mps"}
         incline_thresholds = [-7.5, -2.5, 2.5, 7.5]
         incline_values = [-10, -5, 0, 5, 10]
         speed_thresholds = [0.3, 0.5, 0.7, 0.9, 1.1, 1.3]
         speed_values = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4]
+        speed_values_incline = [0.4, 0.6, 0.8, 1.0]
 
         update_time_R, update_time_L = 0.0, 0.0
         avg_loss_R, avg_loss_L = 0.0, 0.0
@@ -152,11 +150,9 @@ class Controller:
         log_incline_R, log_speed_R = self.data_to_save['incline_R'], self.data_to_save['speed_R']
         log_gpio_output = self.data_to_save['gpio_output']
 
-        current_incline_L = 'LG'; current_speed_L = '0p2mps'  # Default task settings
-        current_incline_L_val = 0; current_speed_L_val = 0
+        current_incline_L = 0; current_speed_L = 0.2  # Default task settings
         prev_incline_L = current_incline_L; prev_speed_L = current_speed_L
-        current_incline_R = 'LG'; current_speed_R = '0p2mps'  # Default task settings
-        current_incline_R_val = 0; current_speed_R_val = 0
+        current_incline_R = 0; current_speed_R = 0.2  # Default task settings
         prev_incline_R = current_incline_R; prev_speed_R = current_speed_R
 
         # Start recording time
@@ -249,7 +245,7 @@ class Controller:
                         input_stream_data_R = input_stream_data[0, :, start_idx_rel:end_idx_rel]
                         mtr_pos_stream_R = log_mtr_pos_R[start_idx_abs:end_idx_abs]
 
-                        self.online_adaptator.trigger_finetuning('R', input_stream_data_R.T.copy(), mtr_pos_stream_R, mid_peak_idx_rel)
+                        self.online_adaptator.trigger_finetuning('R', current_incline_R, current_speed_R, input_stream_data_R.T.copy(), mtr_pos_stream_R, mid_peak_idx_rel)
 
                         # Update the last used peak to the end of the current window
                         self.last_used_peak_idx_R = end_idx_abs
@@ -267,7 +263,7 @@ class Controller:
                         input_stream_data_L = input_stream_data[1, :, start_idx_rel:end_idx_rel]
                         mtr_pos_stream_L = log_mtr_pos_L[start_idx_abs:end_idx_abs]
 
-                        self.online_adaptator.trigger_finetuning('L', input_stream_data_L.T.copy(), mtr_pos_stream_L, mid_peak_idx_rel)
+                        self.online_adaptator.trigger_finetuning('L', current_incline_L, current_speed_L, input_stream_data_L.T.copy(), mtr_pos_stream_L, mid_peak_idx_rel)
 
                         # Update the last used peak to the end of the current window
                         self.last_used_peak_idx_L = end_idx_abs
@@ -275,14 +271,12 @@ class Controller:
             # Check for new weights from the adaptation worker
             updated_params = self.online_adaptator.get_updated_weights()
             if updated_params:
-                side, current_incline, current_speed, avg_loss, update_time, weights, biases = updated_params
+                side, avg_loss, update_time, weights, biases = updated_params
                 if side == 'R':
                     self.linear_weights_R = weights;    self.linear_biases_R = biases
-                    # current_incline_R = current_incline; current_speed_R = current_speed
                     avg_loss_R = avg_loss;  update_time_R = update_time
                 elif side == 'L':
                     self.linear_weights_L = weights;    self.linear_biases_L = biases
-                    # current_incline_L = current_incline; current_speed_L = current_speed
                     avg_loss_L = avg_loss;  update_time_L = update_time
 
             # 5. TensorRT inference & Apply linear layer weights and biases
@@ -341,14 +335,10 @@ class Controller:
             if delayed_gait_phase_L < 5:
                 inc_pred_mean = np.mean(incline_pred_history[1, :]); spd_pred_mean = np.mean(speed_pred_history[1, :])
                 # Discretize incline prediction
-                current_incline_L_val = incline_values[np.searchsorted(incline_thresholds, inc_pred_mean)]
-                current_speed_L_val = speed_values[np.searchsorted(speed_thresholds, spd_pred_mean)]
+                current_incline_L = incline_values[np.searchsorted(incline_thresholds, inc_pred_mean)]
+                current_speed_L = speed_values[np.searchsorted(speed_thresholds, spd_pred_mean)]
 
-                current_incline_L = incline_keys.get(current_incline_L_val, prev_incline_L)
-                current_speed_L = speed_keys.get(current_speed_L_val, prev_speed_L)
-                if current_incline_L != 'LG' and current_speed_L not in ['0p4mps', '0p6mps', '0p8mps', '1p0mps']:
-                    current_incline_L = prev_incline_L; current_speed_L = prev_speed_L
-                elif current_incline_L == 'RD_10deg' and current_speed_L in ['0p4mps', '0p6mps', '1p2mps']:
+                if current_incline_L != 0 and current_speed_L not in speed_values_incline:
                     current_incline_L = prev_incline_L; current_speed_L = prev_speed_L
 
                 motor_cmd_val_L = self.torque_profile[current_incline_L][current_speed_L][int(delayed_gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_L
@@ -359,14 +349,10 @@ class Controller:
             if delayed_gait_phase_R < 5:
                 inc_pred_mean = np.mean(incline_pred_history[0, :]); spd_pred_mean = np.mean(speed_pred_history[0, :])
                 # Discretize incline prediction
-                current_incline_R_val = incline_values[np.searchsorted(incline_thresholds, inc_pred_mean)]
-                current_speed_R_val = speed_values[np.searchsorted(speed_thresholds, spd_pred_mean)]
+                current_incline_R = incline_values[np.searchsorted(incline_thresholds, inc_pred_mean)]
+                current_speed_R = speed_values[np.searchsorted(speed_thresholds, spd_pred_mean)]
 
-                current_incline_R = incline_keys.get(current_incline_R_val, prev_incline_R)
-                current_speed_R = speed_keys.get(current_speed_R_val, prev_speed_R)
-                if current_incline_R != 'LG' and current_speed_R not in ['0p4mps', '0p6mps', '0p8mps', '1p0mps']:
-                    current_incline_R = prev_incline_R; current_speed_R = prev_speed_R
-                elif current_incline_R == 'RD_10deg' and current_speed_R in ['0p4mps', '0p6mps', '1p2mps']:
+                if current_incline_R != 0 and current_speed_R not in speed_values_incline:
                     current_incline_R = prev_incline_R; current_speed_R = prev_speed_R
 
                 motor_cmd_val_R = self.torque_profile[current_incline_R][current_speed_R][int(delayed_gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_R
@@ -383,10 +369,10 @@ class Controller:
 
             if Exo_ON == False: motor_cmd_val_L, motor_cmd_val_R = 0.0, 0.0 # use this for Exo off condition
 
-            if motor_cmd_val_L > 8:    motor_cmd_val_L = 8
-            elif motor_cmd_val_L < -8: motor_cmd_val_L = -8
-            if motor_cmd_val_R > 8:    motor_cmd_val_R = 8
-            elif motor_cmd_val_R < -8: motor_cmd_val_R = -8
+            if motor_cmd_val_L > self.Exo.max_torque:    motor_cmd_val_L = self.Exo.max_torque
+            elif motor_cmd_val_L < -self.Exo.max_torque: motor_cmd_val_L = -self.Exo.max_torque
+            if motor_cmd_val_R > self.Exo.max_torque:    motor_cmd_val_R = self.Exo.max_torque
+            elif motor_cmd_val_R < -self.Exo.max_torque: motor_cmd_val_R = -self.Exo.max_torque
 
             self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_L, motor_cmd_val_L) 
             self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, -motor_cmd_val_R) # Negative sign because the motor is mounted in reverse direction
@@ -446,10 +432,10 @@ class Controller:
                 "incline_R_cont": incline_pred_R,
                 "speed_L_cont": speed_pred_L,
                 "speed_R_cont": speed_pred_R,
-                "incline_L_disc": current_incline_L_val,
-                "incline_R_disc": current_incline_R_val,
-                "speed_L_disc": current_speed_L_val,
-                "speed_R_disc": current_speed_R_val,
+                "incline_L_disc": current_incline_L,
+                "incline_R_disc": current_incline_R,
+                "speed_L_disc": current_speed_L,
+                "speed_R_disc": current_speed_R,
                 "cmd_L": motor_cmd_val_L,
                 "cmd_R": motor_cmd_val_R,
                 "update_time_L": update_time_L,

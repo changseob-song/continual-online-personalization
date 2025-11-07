@@ -100,18 +100,13 @@ def determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, incli
     return best_incline, best_speed, combined_rmse_min
 
 
-def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, hyperparam_config, adaptation_ON=False, replay_buffer_ON=False):
+def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, adaptation_ON=False, replay_buffer_ON=False):
     """
     This worker process handles the fine-tuning of the model.
     All PyTorch and CUDA initializations happen inside this function.
     """
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Adaptation Worker: Using device: {device}")
-
-    with open(ab_avg_input_path, "rb") as f:
-        ab_avg_input = NumpyCompatUnpickler(f).load()
-
-    print(ab_avg_input['LG']['1p0mps'][0].shape)
 
     base_model_path = os.path.dirname(model_path)
     input_mean = np.load(os.path.join(base_model_path, 'input_mean.npy'))
@@ -141,19 +136,19 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
 
     adaptation_worker_warmup(model_R, optimizer_R, criterion, device, model_path, input_mean, input_std, label_mean, label_std)
 
-    inclinations_all = ['RD_10deg', 'RD_5deg', 'LG', 'RA_5deg', 'RA_10deg']
-    speeds_all = ['0p2mps', '0p4mps', '0p6mps', '0p8mps', '1p0mps', '1p2mps', '1p4mps']
-    bin_state = {inc: {spd: {side: 0 for side in ['L', 'R']} for spd in speeds_all} for inc in inclinations_all}
-    input_stream = {inc: {spd: None for spd in speeds_all} for inc in inclinations_all}
-    train_loader = {inc: {spd: {side: None for side in ['L', 'R']} for spd in speeds_all} for inc in inclinations_all}
+    incline_values = [-10, -5, 0, 5, 10]
+    speed_values = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4]
+    bin_state = {inc: {spd: {side: 0 for side in ['L', 'R']} for spd in speed_values} for inc in incline_values}
+    input_stream = {inc: {spd: None for spd in speed_values} for inc in incline_values}
+    train_loader = {inc: {spd: {side: None for side in ['L', 'R']} for spd in speed_values} for inc in incline_values}
     avg_loss = 0
 
     # Main loop to wait for data and fine-tune
     while True:
         try:
             # Wait for data from the main controller
-            side, input_data, mtr_pos_stream, mid_peak_idx = input_q.get() # input data shape : (length, channel num)
-            
+            side, incline, speed, input_data, mtr_pos_stream, mid_peak_idx = input_q.get() # input data shape : (length, channel num)
+
             start_time = time.time()
 
             # Determine either left or right side
@@ -161,8 +156,8 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
             optimizer = optimizer_R if side == 'R' else optimizer_L
 
             # Determine the task by comparing congruency with AB average input
-            incline, speed, rmse_min = determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, inclinations_all, speeds_all)
-            print(f"\nDetected task - Incline: {incline}, Speed: {speed} with congruency RMSE: {rmse_min:.2f} for side {side}")
+            # incline, speed, rmse_min = determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, inclinations_all, speeds_all)
+            # print(f"\nDetected task - Incline: {incline}, Speed: {speed} with congruency RMSE: {rmse_min:.2f} for side {side}")
 
             # if bin_state[incline][speed] == 1:
             #     input_data = interpolate_two_cycles(input_data.T, input_stream[incline][speed].T, weight=0.5)
@@ -184,7 +179,7 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
                 sampled_bins = []
                 if replay_buffer_ON:
                     # Get the positive bins excluding the current task
-                    positive_bins = [(inc, spd) for inc in inclinations_all for spd in speeds_all if (bin_state[inc][spd][side] > 0) and not (inc == incline and spd == speed)]
+                    positive_bins = [(inc, spd) for inc in incline_values for spd in speed_values if (bin_state[inc][spd][side] > 0) and not (inc == incline and spd == speed)]
                     
                     # Only sample if there are positive bins to sample from
                     if positive_bins:
@@ -247,7 +242,7 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
 
             update_time = time.time() - start_time
 
-            output_q.put((side, incline, speed, avg_loss, update_time, updated_weights, updated_biases))
+            output_q.put((side, avg_loss, update_time, updated_weights, updated_biases))
 
         except Exception as e:
             print(f"Adaptation worker error: {e}")
@@ -258,9 +253,8 @@ def adaptation_worker_process(input_q, output_q, model_path, ab_avg_input_path, 
 
 
 class OnlineAdaptator():
-    def __init__(self, model_path, ab_avg_input_path, adaptation_ON=False, replay_buffer_ON=False):
+    def __init__(self, model_path, adaptation_ON=False, replay_buffer_ON=False):
         self.model_path = model_path
-        self.ab_avg_input_path = ab_avg_input_path
         self.input_q = mp.Queue()
         self.output_q = mp.Queue()
         self.adaptation_ON = adaptation_ON
@@ -269,13 +263,13 @@ class OnlineAdaptator():
         # Start the new standalone worker process
         self.adaptation_process = mp.Process(
             target=adaptation_worker_process,
-            args=(self.input_q, self.output_q, self.model_path, self.ab_avg_input_path, hyperparam_config, self.adaptation_ON, self.replay_buffer_ON)
+            args=(self.input_q, self.output_q, self.model_path, hyperparam_config, self.adaptation_ON, self.replay_buffer_ON)
         )
         self.adaptation_process.start()
 
-    def trigger_finetuning(self, side, input_data, mtr_pos_stream, mid_peak_idx):
+    def trigger_finetuning(self, side, incline, speed, input_data, mtr_pos_stream, mid_peak_idx):
         """Sends data to the adaptation worker to start fine-tuning."""
-        self.input_q.put((side, input_data, mtr_pos_stream, mid_peak_idx))
+        self.input_q.put((side, incline, speed, input_data, mtr_pos_stream, mid_peak_idx))
 
     def get_updated_weights(self):
         """Checks for and returns updated weights from the worker."""
