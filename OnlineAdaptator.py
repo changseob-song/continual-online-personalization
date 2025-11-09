@@ -147,7 +147,7 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
     while True:
         try:
             # Wait for data from the main controller
-            side, incline, speed, input_data, mtr_pos_stream, mid_peak_idx = input_q.get() # input data shape : (length, channel num)
+            side, incline, speed, input_data, mid_peak_idx = input_q.get() # input data shape : (length, channel num)
 
             start_time = time.time()
 
@@ -267,9 +267,9 @@ class OnlineAdaptator():
         )
         self.adaptation_process.start()
 
-    def trigger_finetuning(self, side, incline, speed, input_data, mtr_pos_stream, mid_peak_idx):
+    def trigger_finetuning(self, side, incline, speed, input_data, mid_peak_idx):
         """Sends data to the adaptation worker to start fine-tuning."""
-        self.input_q.put((side, incline, speed, input_data, mtr_pos_stream, mid_peak_idx))
+        self.input_q.put((side, incline, speed, input_data, mid_peak_idx))
 
     def get_updated_weights(self):
         """Checks for and returns updated weights from the worker."""
@@ -293,6 +293,7 @@ class LoadData(Dataset):
         peak_indices = mid_peak_idx.tolist()
         peak_indices.insert(0, 0)  # Add start index
         peak_indices.append(self.input.shape[0])  # Add end index
+        print(side, incline, speed, f"Peak indices: {peak_indices}")
 
         if (len(peak_indices) - 1) < 2:
             print(f"Not enough gait cycles detected. {len(peak_indices) - 1} Need at least 2.")

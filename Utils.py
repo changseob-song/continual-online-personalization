@@ -1,9 +1,8 @@
-import os, torch, gc
+import os, torch, gc, time
 import numpy as np
 import pandas as pd
 import tensorrt as trt
 from scipy.signal import butter, filtfilt
-from Exo import Exo
 from Utils_GPIO import GPIO_control
 
 import pickle
@@ -224,8 +223,7 @@ def inference_worker(input_q, output_q, trt_engine_path, trt_task_estimator_path
     del runtime
     print("Worker: Exited.")
 
-
-# Function to save all collected data
+# Function to save all collected dataif 
 def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None):
 
     # Convert lists to NumPy arrays
@@ -242,7 +240,7 @@ def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None)
     sliced_data = {k: v[start_idx:end_idx] for k, v in data_np.items()}
 
     # Define data for motor CSV
-    motor_cols = ['timestamp', 'mtr_pos_L', 'mtr_pos_R', 'mtr_vel_L', 'mtr_vel_R', 'gpio_output']
+    motor_cols = ['timestamp', 'mtr_pos_L', 'mtr_pos_R', 'mtr_vel_L', 'mtr_vel_R', 'fsr_L', 'fsr_R', 'gpio_output']
     save_dataframe(f'{trial_name}_input_motor.csv', sliced_data, motor_cols)
 
     # Define data for IMU CSV

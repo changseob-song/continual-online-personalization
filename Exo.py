@@ -1,6 +1,7 @@
 import can
 import Utils_tmotor_v3, Utils_actuator_group
 from Utils_ICM20948_I2C_pcb2 import ICM20948_I2C_IMUs
+from Utils_ADS1115_I2C import ADS1115_I2C
 
 class Exo:
     def __init__(self,):
@@ -25,6 +26,10 @@ class Exo:
         # IMU initialization
         self.imus = ICM20948_I2C_IMUs()  # Back, Left hip, Right hip
 
+        # FSR initialization
+        self.fsr_adc = ADS1115_I2C()
+        self.fsr_threshold = 15000  # Threshold value to detect foot contact
+
         # Specify the CAN interface and channel
         try:
             self.bus = can.Bus(interface='socketcan', channel='can0')  # Replace 'socketcan' and 'can0' with your actual interface and channel
@@ -36,6 +41,5 @@ class Exo:
     def update_readings(self, CAN_id):
         mtr_pos = self.mtr_comms.get_position(CAN_id, degrees=True)
         mtr_vel = self.mtr_comms.get_velocity(CAN_id, degrees=False)
-        mtr_torque = self.mtr_comms.get_torque(CAN_id)
 
         return mtr_pos, mtr_vel

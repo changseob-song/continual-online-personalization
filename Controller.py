@@ -39,6 +39,7 @@ class Controller:
             'mtr_pos_L': np.zeros(max_samples), 'mtr_pos_R': np.zeros(max_samples),
             'mtr_vel_L': np.zeros(max_samples), 'mtr_vel_R': np.zeros(max_samples),
             'imu_L': np.zeros((max_samples, 6)), 'imu_R': np.zeros((max_samples, 6)),
+            'fsr_L': np.zeros(max_samples), 'fsr_R': np.zeros(max_samples),
             'mtr_cmd_L': np.zeros(max_samples), 'mtr_cmd_R': np.zeros(max_samples),
             'gait_phase_L': np.zeros(max_samples), 'gait_phase_R': np.zeros(max_samples),
             'incline_L': ['']*max_samples, 'speed_L': ['']*max_samples,
@@ -101,6 +102,17 @@ class Controller:
         # Initialize OnlineAdaptator
         self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.adaptation_ON, self.replay_buffer_ON)
 
+    def detect_heel_strike(self, fsr_data, threshold, min_interval):
+        # Create binary FSR signal based on threshold
+        bi_fsr = np.where(fsr_data < threshold, 0, 1)
+        diff_fsr = np.diff(bi_fsr)
+        # Find indices where the signal goes from 0 to 1
+        heelstrike_index = np.where(diff_fsr == 1)[0] + 1
+        if heelstrike_index.size == 0:
+            return np.array([], dtype=int)
+        valid_heelstrikes = heelstrike_index[np.insert(np.diff(heelstrike_index) >= min_interval, 0, True)]
+        return valid_heelstrikes
+
     def run_loop(self, Exo_ON=False):
 
         # Setting for the exiting process
@@ -115,14 +127,13 @@ class Controller:
         incline_pred_history = np.zeros((2, self.Exo.frame_length_task), dtype=np.float32)
         speed_pred_history = np.zeros((2, self.Exo.frame_length_task), dtype=np.float32)
 
-        current_pos_L, current_vel_L = 0.0, 0.0
-        current_pos_R, current_vel_R = 0.0, 0.0
-        gait_phase_R_prev = 0.0
-        gait_phase_L_prev = 0.0
+        mtr_pos_L, mtr_pos_R = 0.0, 0.0
+        mtr_vel_L, mtr_vel_R = 0.0, 0.0
+        imu_L, imu_R = np.zeros(6), np.zeros(6)
+        fsr_L, fsr_R = 0.0, 0.0
 
-        local_l_data = np.zeros(6); local_r_data = np.zeros(6)
-
-        right_data = np.zeros(self.num_input_features); left_data = np.zeros(self.num_input_features)
+        left_data, right_data = np.zeros(self.num_input_features), np.zeros(self.num_input_features)
+        gait_phase_L_prev, gait_phase_R_prev = 0.0, 0.0
 
         last_model_output_r = np.zeros((80, 100), dtype=np.float32); last_model_output_l = np.zeros((80, 100), dtype=np.float32)
         last_model_output_r_task = np.zeros((2,), dtype=np.float32); last_model_output_l_task = np.zeros((2,), dtype=np.float32)
@@ -143,6 +154,7 @@ class Controller:
         log_mtr_pos_L, log_mtr_pos_R = self.data_to_save['mtr_pos_L'], self.data_to_save['mtr_pos_R']
         log_mtr_vel_L, log_mtr_vel_R = self.data_to_save['mtr_vel_L'], self.data_to_save['mtr_vel_R']
         log_imu_L, log_imu_R = self.data_to_save['imu_L'], self.data_to_save['imu_R']
+        log_fsr_L, log_fsr_R = self.data_to_save['fsr_L'], self.data_to_save['fsr_R']
         log_mtr_cmd_L, log_mtr_cmd_R = self.data_to_save['mtr_cmd_L'], self.data_to_save['mtr_cmd_R']
         log_gait_phase_L, log_gait_phase_R = self.data_to_save['gait_phase_L'], self.data_to_save['gait_phase_R']
 
@@ -178,95 +190,95 @@ class Controller:
         # Main control loop
         while True:
 
-            log_incline_L[loop_index] = current_incline_L; log_speed_L[loop_index] = current_speed_L
-            log_incline_R[loop_index] = current_incline_R; log_speed_R[loop_index] = current_speed_R
-
             # 1. Read the motor encoder values
-            current_pos_L, current_vel_L = self.Exo.update_readings(self.Exo.CAN_id_L)
-            current_pos_R, current_vel_R = self.Exo.update_readings(self.Exo.CAN_id_R)
-
-            current_pos_R *= -1; current_vel_R *= -1 # mirror the right side values (because of the motor mounting direction)
-
-            log_mtr_pos_L[loop_index] = current_pos_L; log_mtr_pos_R[loop_index] = current_pos_R
-            log_mtr_vel_L[loop_index] = current_vel_L; log_mtr_vel_R[loop_index] = current_vel_R
+            mtr_pos_L, mtr_vel_L = self.Exo.update_readings(self.Exo.CAN_id_L)
+            mtr_pos_R, mtr_vel_R = self.Exo.update_readings(self.Exo.CAN_id_R)
+            mtr_pos_R *= -1; mtr_vel_R *= -1 # mirror the right side values (because of the motor mounting direction)
+            log_mtr_pos_L[loop_index] = mtr_pos_L; log_mtr_pos_R[loop_index] = mtr_pos_R
+            log_mtr_vel_L[loop_index] = mtr_vel_L; log_mtr_vel_R[loop_index] = mtr_vel_R
 
             # 2. Read the IMU values
             imu_dict = self.Exo.imus.read_IMUs()
+            imu_L, imu_R = imu_dict["IMU_THIGH_LEFT"], imu_dict["IMU_THIGH_RIGHT"]
+            log_imu_L[loop_index, :], log_imu_R[loop_index, :] = imu_L, imu_R
 
-            local_l_data = imu_dict["IMU_THIGH_LEFT"]; local_r_data = imu_dict["IMU_THIGH_RIGHT"]
-            log_imu_L[loop_index, :] = local_l_data; log_imu_R[loop_index, :] = local_r_data
+            # 2.1 Read the FSR values
+            if loop_index % 2 == 0:
+                fsr_L = self.Exo.fsr_adc.read_FSR(0)
+            else:
+                fsr_R = self.Exo.fsr_adc.read_FSR(1)
+            log_fsr_L[loop_index] = fsr_L; log_fsr_R[loop_index] = fsr_R
 
-            # 3. Mirror the left data to the right side
-            l_data_reflected = local_l_data.copy()
-            l_data_reflected[1] *= -1; l_data_reflected[3] *= -1; l_data_reflected[5] *= -1
-            
+            # 3. Mirror the left data to the right side (Unilateral model input)
+            imu_L_reflected = imu_L.copy()
+            imu_L_reflected[1] *= -1; imu_L_reflected[3] *= -1; imu_L_reflected[5] *= -1
+
             # 4. Prepare the model input data
-            right_data[:6] = local_r_data; #right_data[6] = current_pos_R
-            left_data[:6] = l_data_reflected; #left_data[6] = current_pos_L
+            left_data[:6], right_data[:6] = imu_L_reflected, imu_R
 
-            right_data_norm = (right_data - self.input_mean) / self.input_std
             left_data_norm = (left_data - self.input_mean) / self.input_std
+            right_data_norm = (right_data - self.input_mean) / self.input_std
 
             model_input_arr = fast_roll(model_input_arr)
-            model_input_arr[0, :, -1] = right_data_norm; model_input_arr[1, :, -1] = left_data_norm
+            model_input_arr[0, :, -1] = left_data_norm
+            model_input_arr[1, :, -1] = right_data_norm
 
             # 4.1 Prepare the input data for online adaptation
             if first_pulse_sent:
 
                 input_stream_data = fast_roll(input_stream_data)
-                input_stream_data[0, :, -1] = right_data; input_stream_data[1, :, -1] = left_data
+                input_stream_data[0, :, -1], input_stream_data[1, :, -1] = left_data, right_data
 
                 # --- REVISED ADAPTATION TRIGGER LOGIC ---
                 update_freq_gc = 2 # Number of gait cycles for each adaptation update
                 
                 # Optimized peak detection on recent data
-                search_window = 600 # Search in the last 6 seconds
+                search_window = 500 # Search in the last 5 seconds
                 search_start_idx = max(0, loop_index - search_window)
-                recent_pos_L = self.data_to_save['mtr_pos_L'][search_start_idx:loop_index]
-                recent_pos_R = self.data_to_save['mtr_pos_R'][search_start_idx:loop_index]
+                recent_fsr_L = self.data_to_save['fsr_L'][search_start_idx:loop_index]
+                recent_fsr_R = self.data_to_save['fsr_R'][search_start_idx:loop_index]
 
-                peak_indices_L, _ = find_peaks(-recent_pos_L, height=None, distance=40, prominence=15)
-                peak_indices_L += search_start_idx # This makes the indices back to absolute timeframe
-                peak_indices_R, _ = find_peaks(-recent_pos_R, height=None, distance=40, prominence=15)
-                peak_indices_R += search_start_idx
-                
+                heelstrike_indices_L = self.detect_heel_strike(recent_fsr_L, self.Exo.fsr_threshold, min_interval=30)
+                heelstrike_indices_L += search_start_idx  # Convert to absolute indices
+                heelstrike_indices_R = self.detect_heel_strike(recent_fsr_R, self.Exo.fsr_threshold, min_interval=30)
+                heelstrike_indices_R += search_start_idx  # Convert to absolute indices
+
                 buffer_start_abs = loop_index - len(input_stream_data[0, 0, :])
 
-                # Check if there are enough new peaks for an update (2 gait cycles = 2 new peaks after the start)
-                if self.last_used_peak_idx_R not in peak_indices_R:
-                    if len(peak_indices_R) > update_freq_gc:
+                # Check if there are enough new heel strikes for an update (2 gait cycles = 2 new heel strikes after the start)
+                if self.last_used_peak_idx_L not in heelstrike_indices_L:
+                    if len(heelstrike_indices_L) > update_freq_gc:
                         # Get the absolute start and end indices for the data slice
-                        start_idx_abs = peak_indices_R[0]; end_idx_abs = peak_indices_R[-1]
-                        print('\nR', start_idx_abs, peak_indices_R[-2], end_idx_abs)
-                        mid_peak_idx_rel = peak_indices_R[1:-1] - start_idx_abs # This is relative about start_idx_abs
+                        start_idx_abs = heelstrike_indices_L[0]; end_idx_abs = heelstrike_indices_L[-1]
+                        print('\nL', start_idx_abs, heelstrike_indices_L[1:-1], end_idx_abs)
+                        mid_peak_idx_rel = heelstrike_indices_L[1:-1] - start_idx_abs # This is relative about start_idx_abs
 
                         # Slice the data from the input stream buffer
                         start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
-                        input_stream_data_R = input_stream_data[0, :, start_idx_rel:end_idx_rel]
-                        mtr_pos_stream_R = log_mtr_pos_R[start_idx_abs:end_idx_abs]
+                        input_stream_data_L = input_stream_data[0, :, start_idx_rel:end_idx_rel]
 
-                        self.online_adaptator.trigger_finetuning('R', current_incline_R, current_speed_R, input_stream_data_R.T.copy(), mtr_pos_stream_R, mid_peak_idx_rel)
-
-                        # Update the last used peak to the end of the current window
-                        self.last_used_peak_idx_R = end_idx_abs
-
-                # Check if there are enough new peaks for an update (2 gait cycles = 2 new peaks after the start)
-                if self.last_used_peak_idx_L not in peak_indices_L:
-                    if len(peak_indices_L) > update_freq_gc:
-                        # Get the absolute start and end indices for the data slice
-                        start_idx_abs = peak_indices_L[0]; end_idx_abs = peak_indices_L[-1]
-                        print('\nL', start_idx_abs, peak_indices_L[-2], end_idx_abs)
-                        mid_peak_idx_rel = peak_indices_L[1:-1] - start_idx_abs # This is relative about start_idx_abs
-
-                        # Slice the data from the input stream buffer
-                        start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
-                        input_stream_data_L = input_stream_data[1, :, start_idx_rel:end_idx_rel]
-                        mtr_pos_stream_L = log_mtr_pos_L[start_idx_abs:end_idx_abs]
-
-                        self.online_adaptator.trigger_finetuning('L', current_incline_L, current_speed_L, input_stream_data_L.T.copy(), mtr_pos_stream_L, mid_peak_idx_rel)
+                        self.online_adaptator.trigger_finetuning('L', current_incline_L, current_speed_L, input_stream_data_L.T.copy(), mid_peak_idx_rel)
 
                         # Update the last used peak to the end of the current window
                         self.last_used_peak_idx_L = end_idx_abs
+                        print(self.last_used_peak_idx_L)
+
+                # Check if there are enough new heel strikes for an update (2 gait cycles = 2 new heel strikes after the start)
+                if self.last_used_peak_idx_R not in heelstrike_indices_R:
+                    if len(heelstrike_indices_R) > update_freq_gc:
+                        # Get the absolute start and end indices for the data slice
+                        start_idx_abs = heelstrike_indices_R[0]; end_idx_abs = heelstrike_indices_R[-1]
+                        print('\nR', start_idx_abs, heelstrike_indices_R[1:-1], end_idx_abs)
+                        mid_peak_idx_rel = heelstrike_indices_R[1:-1] - start_idx_abs # This is relative about start_idx_abs
+
+                        # Slice the data from the input stream buffer
+                        start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
+                        input_stream_data_R = input_stream_data[1, :, start_idx_rel:end_idx_rel]
+
+                        self.online_adaptator.trigger_finetuning('R', current_incline_R, current_speed_R, input_stream_data_R.T.copy(), mid_peak_idx_rel)
+
+                        # Update the last used peak to the end of the current window
+                        self.last_used_peak_idx_R = end_idx_abs
 
             # Check for new weights from the adaptation worker
             updated_params = self.online_adaptator.get_updated_weights()
@@ -280,37 +292,36 @@ class Controller:
                     avg_loss_L = avg_loss;  update_time_L = update_time
 
             # 5. TensorRT inference & Apply linear layer weights and biases
-            self.input_q.put((model_input_arr[0, :, :].copy(), model_input_arr[1, :, :].copy()))
+            self.input_q.put((model_input_arr[1, :, :].copy(), model_input_arr[0, :, :].copy()))
             try:
                 model_output_r_val, model_output_l_val, model_output_r_task, model_output_l_task = self.output_q.get_nowait()
-                last_model_output_r, last_model_output_l = model_output_r_val, model_output_l_val
-                last_model_output_r_task, last_model_output_l_task = model_output_r_task, model_output_l_task
+                last_model_output_l, last_model_output_r = model_output_l_val, model_output_r_val
+                last_model_output_l_task, last_model_output_r_task = model_output_l_task, model_output_r_task
             except mp.queues.Empty:
-                model_output_r_val, model_output_l_val = last_model_output_r, last_model_output_l
-                model_output_r_task, model_output_l_task = last_model_output_r_task, last_model_output_l_task
-            
+                model_output_l_val, model_output_r_val = last_model_output_l, last_model_output_r
+                model_output_l_task, model_output_r_task = last_model_output_l_task, last_model_output_r_task
+
             # Apply linear layer weights and biases
+            model_output_l_val = np.dot(model_output_l_val.flatten(), self.linear_weights_L.T)
+            model_output_l_val += self.linear_biases_L
             model_output_r_val = np.dot(model_output_r_val.flatten(), self.linear_weights_R.T)
             model_output_r_val += self.linear_biases_R
 
-            model_output_l_val = np.dot(model_output_l_val.flatten(), self.linear_weights_L.T)
-            model_output_l_val += self.linear_biases_L
-
             # 6. Calculate the gait phase
-            model_output_r_denorm = model_output_r_val * self.label_std + self.label_mean
             model_output_l_denorm = model_output_l_val * self.label_std + self.label_mean
+            model_output_r_denorm = model_output_r_val * self.label_std + self.label_mean
+            gait_phase_L, gait_phase_R = cartesian_to_percentage(model_output_l_denorm), cartesian_to_percentage(model_output_r_denorm)
 
-            gait_phase_R = cartesian_to_percentage(model_output_r_denorm)
-            gait_phase_L = cartesian_to_percentage(model_output_l_denorm)
+            # Store previous gait phase if decreasing 
+            # if (3 < gait_phase_L_prev < 97) and (gait_phase_L < gait_phase_L_prev): gait_phase_L = gait_phase_L_prev
+            # elif (gait_phase_L_prev <= 3) and (gait_phase_L > 80): gait_phase_L = gait_phase_L_prev
+            # else: gait_phase_L_prev = gait_phase_L
+            # if (3 < gait_phase_R_prev < 97) and (gait_phase_R < gait_phase_R_prev): gait_phase_R = gait_phase_R_prev
+            # elif (gait_phase_R_prev <= 3) and (gait_phase_R > 80): gait_phase_R = gait_phase_R_prev
+            # else: gait_phase_R_prev = gait_phase_R
 
-            # Store previous gait phase if decreasing
-            if (gait_phase_R < gait_phase_R_prev) and (gait_phase_R_prev < 95): gait_phase_R = gait_phase_R_prev
-            else: gait_phase_R_prev = gait_phase_R
-            if (gait_phase_L < gait_phase_L_prev) and (gait_phase_L_prev < 95): gait_phase_L = gait_phase_L_prev
-            else: gait_phase_L_prev = gait_phase_L
-
-            delayed_gait_phase_R = (gait_phase_R - self.Exo.delay_factor) % 100
             delayed_gait_phase_L = (gait_phase_L - self.Exo.delay_factor) % 100
+            delayed_gait_phase_R = (gait_phase_R - self.Exo.delay_factor) % 100
 
             # if loop_index / self.Exo.control_freq_Hz >= self.pulse_after_start:
             #     gradual_torque_scale = min(1.0, ((loop_index / self.Exo.control_freq_Hz) - self.pulse_after_start) / self.adjustment_duration)
@@ -321,8 +332,8 @@ class Controller:
             gradual_torque_scale_R = 1 # np.max((1 - avg_loss_R), 0)
 
             # 6.1 Get the task estimation outputs
-            model_output_r_task_denorm = model_output_r_task * self.label_std_task + self.label_mean_task
             model_output_l_task_denorm = model_output_l_task * self.label_std_task + self.label_mean_task
+            model_output_r_task_denorm = model_output_r_task * self.label_std_task + self.label_mean_task
 
             incline_pred_R = model_output_r_task_denorm[0]; incline_pred_L = model_output_l_task_denorm[0]
             speed_pred_R = model_output_r_task_denorm[1]; speed_pred_L = model_output_l_task_denorm[1]
@@ -332,7 +343,7 @@ class Controller:
             speed_pred_history[0, -1] = speed_pred_R; speed_pred_history[1, -1] = speed_pred_L
 
             # 7. Send the torque command to the motors
-            if delayed_gait_phase_L < 5:
+            if delayed_gait_phase_L < 3:
                 inc_pred_mean = np.mean(incline_pred_history[1, :]); spd_pred_mean = np.mean(speed_pred_history[1, :])
                 # Discretize incline prediction
                 current_incline_L = incline_values[np.searchsorted(incline_thresholds, inc_pred_mean)]
@@ -346,7 +357,7 @@ class Controller:
             else:
                 motor_cmd_val_L = self.torque_profile[prev_incline_L][prev_speed_L][int(delayed_gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_L
             
-            if delayed_gait_phase_R < 5:
+            if delayed_gait_phase_R < 3:
                 inc_pred_mean = np.mean(incline_pred_history[0, :]); spd_pred_mean = np.mean(speed_pred_history[0, :])
                 # Discretize incline prediction
                 current_incline_R = incline_values[np.searchsorted(incline_thresholds, inc_pred_mean)]
@@ -363,13 +374,15 @@ class Controller:
             motor_cmd_array = fast_roll(motor_cmd_array)
             motor_cmd_array[:, -1] = [motor_cmd_val_R, motor_cmd_val_L]    
 
+            log_incline_L[loop_index] = current_incline_L; log_speed_L[loop_index] = current_speed_L
+            log_incline_R[loop_index] = current_incline_R; log_speed_R[loop_index] = current_speed_R
+
             # 8. Filter the torque command
             # motor_cmd_val_L = causal_filter(motor_cmd_array[1, :], tau=0.05)[-1]
             # motor_cmd_val_R = causal_filter(motor_cmd_array[0, :], tau=0.05)[-1]
 
             if Exo_ON == False: motor_cmd_val_L, motor_cmd_val_R = 0.0, 0.0 # use this for Exo off condition
-
-            if motor_cmd_val_L > self.Exo.max_torque:    motor_cmd_val_L = self.Exo.max_torque
+            if motor_cmd_val_L > self.Exo.max_torque:    motor_cmd_val_L = self.Exo.max_torque 
             elif motor_cmd_val_L < -self.Exo.max_torque: motor_cmd_val_L = -self.Exo.max_torque
             if motor_cmd_val_R > self.Exo.max_torque:    motor_cmd_val_R = self.Exo.max_torque
             elif motor_cmd_val_R < -self.Exo.max_torque: motor_cmd_val_R = -self.Exo.max_torque
@@ -378,11 +391,8 @@ class Controller:
             self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, -motor_cmd_val_R) # Negative sign because the motor is mounted in reverse direction
 
             # 8. Stack the data (that will be saved after the trial)
-            log_mtr_cmd_L[loop_index] = motor_cmd_val_L
-            log_mtr_cmd_R[loop_index] = motor_cmd_val_R
-
-            log_gait_phase_L[loop_index] = gait_phase_L
-            log_gait_phase_R[loop_index] = gait_phase_R
+            log_mtr_cmd_L[loop_index], log_mtr_cmd_R[loop_index] = motor_cmd_val_L, motor_cmd_val_R
+            log_gait_phase_L[loop_index], log_gait_phase_R[loop_index] = gait_phase_L, gait_phase_R
 
             # GPIO pulse logic starting from here
             current_time = time.time() - start_time
@@ -392,26 +402,19 @@ class Controller:
                 self.GPIO_control.send_gpio_pulse_start()
                 first_pulse_sent = True
                 first_pulse_end_time = current_time + 0.2  # 200ms pulse duration
-                print("First pulse sent")
             # First pulse end
             if first_pulse_sent and first_pulse_end_time and current_time >= first_pulse_end_time:
                 self.GPIO_control.send_gpio_pulse_end()
-                first_pulse_end_time = None
-                print("First pulse ended")
-            
+                first_pulse_end_time = None            
             # Second pulse
             if current_time >= (self.pulse_after_start + self.trial_dur_sec) and not second_pulse_sent:
                 self.GPIO_control.send_gpio_pulse_start()
                 second_pulse_sent = True
                 second_pulse_end_time = current_time + 0.2  # 200ms pulse duration
-                print("Second pulse sent")
-            
             # Second pulse end
             if second_pulse_sent and second_pulse_end_time and current_time >= second_pulse_end_time:
                 self.GPIO_control.send_gpio_pulse_end()
                 second_pulse_end_time = None
-                print("Second pulse ended")
-
                 break # Exit the loop after the second pulse ends
 
             # GPIO output logging
@@ -422,10 +425,12 @@ class Controller:
 
             # 10. Send telemetry data
             telemetry_data = {
-                "pos_L": current_pos_L,
-                "pos_R": current_pos_R,
-                "gyroY_L": local_l_data[4],
-                "gyroY_R": local_r_data[4],
+                "pos_L": mtr_pos_L,
+                "pos_R": mtr_pos_R,
+                "gyroY_L": imu_L[4],
+                "gyroY_R": imu_R[4],
+                "fsr_L": fsr_L,
+                "fsr_R": fsr_R,
                 "gait_phase_L": gait_phase_L,
                 "gait_phase_R": gait_phase_R,
                 "incline_L_cont": incline_pred_L,
