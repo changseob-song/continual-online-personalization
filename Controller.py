@@ -121,6 +121,7 @@ class Controller:
 
         # Rolling array initialization of model output array (2xframe_length)
         model_input_arr = np.zeros((2, self.num_input_features, self.Exo.frame_length), dtype=np.float32)
+        model_input_arr_task = np.zeros((2, self.num_input_features, self.Exo.frame_length_task), dtype=np.float32)
         # Predefine input stream data size for online adaptation (6 seconds buffer)
         input_stream_data = np.zeros((2, self.num_input_features, 6 * self.Exo.control_freq_Hz), dtype=np.float32)  # 100 frames of input data
         motor_cmd_array = np.zeros((2, self.Exo.frame_length), dtype=np.float32)  # for torque command filtering
@@ -216,12 +217,13 @@ class Controller:
             # 4. Prepare the model input data
             left_data[:6], right_data[:6] = imu_L_reflected, imu_R
 
-            left_data_norm = (left_data - self.input_mean) / self.input_std
-            right_data_norm = (right_data - self.input_mean) / self.input_std
+            left_data_norm, right_data_norm = (left_data - self.input_mean) / self.input_std, (right_data - self.input_mean) / self.input_std
+            left_data_norm_task, right_data_norm_task = (left_data - self.input_mean_task) / self.input_std_task, (right_data - self.input_mean_task) / self.input_std_task
 
             model_input_arr = fast_roll(model_input_arr)
-            model_input_arr[0, :, -1] = left_data_norm
-            model_input_arr[1, :, -1] = right_data_norm
+            model_input_arr[0, :, -1], model_input_arr[1, :, -1] = left_data_norm, right_data_norm
+            model_input_arr_task = fast_roll(model_input_arr_task)
+            model_input_arr_task[0, :, -1], model_input_arr_task[1, :, -1] = left_data_norm_task, right_data_norm_task
 
             # 4.1 Prepare the input data for online adaptation
             if first_pulse_sent:
@@ -239,9 +241,9 @@ class Controller:
                 recent_fsr_R = self.data_to_save['fsr_R'][search_start_idx:loop_index]
 
                 heelstrike_indices_L = self.detect_heel_strike(recent_fsr_L, self.Exo.fsr_threshold, min_interval=30)
-                heelstrike_indices_L += search_start_idx  # Convert to absolute indices
+                heelstrike_indices_L += (search_start_idx)  # Convert to absolute indices
                 heelstrike_indices_R = self.detect_heel_strike(recent_fsr_R, self.Exo.fsr_threshold, min_interval=30)
-                heelstrike_indices_R += search_start_idx  # Convert to absolute indices
+                heelstrike_indices_R += (search_start_idx)  # Convert to absolute indices
 
                 buffer_start_abs = loop_index - len(input_stream_data[0, 0, :])
 
@@ -292,9 +294,9 @@ class Controller:
                     avg_loss_L = avg_loss;  update_time_L = update_time
 
             # 5. TensorRT inference & Apply linear layer weights and biases
-            self.input_q.put((model_input_arr[1, :, :].copy(), model_input_arr[0, :, :].copy()))
+            self.input_q.put((model_input_arr[0, :, :].copy(), model_input_arr[1, :, :].copy(), model_input_arr_task[0, :, :].copy(), model_input_arr_task[1, :, :].copy()))
             try:
-                model_output_r_val, model_output_l_val, model_output_r_task, model_output_l_task = self.output_q.get_nowait()
+                model_output_l_val, model_output_r_val, model_output_l_task, model_output_r_task = self.output_q.get_nowait()
                 last_model_output_l, last_model_output_r = model_output_l_val, model_output_r_val
                 last_model_output_l_task, last_model_output_r_task = model_output_l_task, model_output_r_task
             except mp.queues.Empty:
@@ -313,12 +315,12 @@ class Controller:
             gait_phase_L, gait_phase_R = cartesian_to_percentage(model_output_l_denorm), cartesian_to_percentage(model_output_r_denorm)
 
             # Store previous gait phase if decreasing 
-            # if (3 < gait_phase_L_prev < 97) and (gait_phase_L < gait_phase_L_prev): gait_phase_L = gait_phase_L_prev
-            # elif (gait_phase_L_prev <= 3) and (gait_phase_L > 80): gait_phase_L = gait_phase_L_prev
-            # else: gait_phase_L_prev = gait_phase_L
-            # if (3 < gait_phase_R_prev < 97) and (gait_phase_R < gait_phase_R_prev): gait_phase_R = gait_phase_R_prev
-            # elif (gait_phase_R_prev <= 3) and (gait_phase_R > 80): gait_phase_R = gait_phase_R_prev
-            # else: gait_phase_R_prev = gait_phase_R
+            if (3 < gait_phase_L_prev < 97) and (gait_phase_L < gait_phase_L_prev): gait_phase_L = gait_phase_L_prev
+            elif (gait_phase_L_prev <= 3) and (gait_phase_L > 80): gait_phase_L = gait_phase_L_prev
+            else: gait_phase_L_prev = gait_phase_L
+            if (3 < gait_phase_R_prev < 97) and (gait_phase_R < gait_phase_R_prev): gait_phase_R = gait_phase_R_prev
+            elif (gait_phase_R_prev <= 3) and (gait_phase_R > 80): gait_phase_R = gait_phase_R_prev
+            else: gait_phase_R_prev = gait_phase_R
 
             delayed_gait_phase_L = (gait_phase_L - self.Exo.delay_factor) % 100
             delayed_gait_phase_R = (gait_phase_R - self.Exo.delay_factor) % 100

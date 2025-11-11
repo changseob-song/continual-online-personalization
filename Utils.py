@@ -187,12 +187,13 @@ def inference_worker(input_q, output_q, trt_engine_path, trt_task_estimator_path
     context_task = engine_task.create_execution_context()
 
     dummy_input_data = np.zeros((1, num_input_features, frame_length), dtype=np.float32)
+    dummy_input_data_task = np.zeros((1, num_input_features, frame_length_task), dtype=np.float32)
     dummy_output_shape = (80, 100)
     dummy_output_shape_task = (2,)
     for _ in range(10):
         _ = trt_inference(dummy_input_data, dummy_output_shape, context)
     for _ in range(10):
-        _ = trt_inference(dummy_input_data, dummy_output_shape_task, context_task)
+        _ = trt_inference(dummy_input_data_task, dummy_output_shape_task, context_task)
     print("TensorRT engine warmed up.")
 
     while True:
@@ -202,19 +203,19 @@ def inference_worker(input_q, output_q, trt_engine_path, trt_task_estimator_path
                 print("Worker: Stop signal received. Exiting.")
                 break
 
-            model_input_r_arr, model_input_l_arr = data_in
+            model_input_arr_l, model_input_arr_r, model_input_arr_task_l, model_input_arr_task_r = data_in
 
             # Gait phase estimation
             output_shape = (80, 100)  # Assuming scalar output from model
-            model_output_r = trt_inference(model_input_r_arr, output_shape, context)
-            model_output_l = trt_inference(model_input_l_arr, output_shape, context)
+            model_output_l = trt_inference(model_input_arr_l, output_shape, context)
+            model_output_r = trt_inference(model_input_arr_r, output_shape, context)
 
             # Task estimation
             output_shape_task = (2,)  # Assuming scalar output from model
-            model_output_task_r = trt_inference(model_input_r_arr, output_shape_task, context_task) # We assume here that the input frame length is same as gait phase estimator
-            model_output_task_l = trt_inference(model_input_l_arr, output_shape_task, context_task)
+            model_output_task_l = trt_inference(model_input_arr_task_l, output_shape_task, context_task)
+            model_output_task_r = trt_inference(model_input_arr_task_r, output_shape_task, context_task) # We assume here that the input frame length is same as gait phase estimator
 
-            output_q.put((model_output_r, model_output_l, model_output_task_r, model_output_task_l))
+            output_q.put((model_output_l, model_output_r, model_output_task_l, model_output_task_r))
         except Exception as e:
             print(f"Worker: Error during inference: {e}")
             break

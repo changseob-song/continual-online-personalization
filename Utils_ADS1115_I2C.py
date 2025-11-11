@@ -18,7 +18,7 @@ class ADS1115_I2C:
     def read_FSR(self, port):
         self.i2cbus.write_byte(self.MUX_ADDRESS, self.MUX_port) # Make sure to select correct MUX port
         self.ADS.requestADC(port)
-        # time.sleep(0.0021) # Wait for conversion to complete (1/860s = ~1.16ms)
+        time.sleep(0.0021) # Wait for conversion to complete (1/860s = ~1.16ms)
         fsr_value = self.ADS.getValue()
 
         return fsr_value
@@ -29,16 +29,17 @@ def main():
 
     while True:
         # print("{:.3f}\t{:.3f}".format(*FSR_ADC.read_FSRs()[:2]))
-        # print("{:.3f}\t{:.3f}".format(*FSR_ADC.read_FSRs()[2:]))
 
         fsr_log_start = time.time()
         L = FSR_ADC.read_FSR(0)
+        # time.sleep(0.01)
         R = FSR_ADC.read_FSR(1)
         fsr_log_time = time.time() - fsr_log_start
 
         teleplot.sendTelemetry('FSR1 value', L)
         teleplot.sendTelemetry('FSR2 value', R)
-        teleplot.sendTelemetry('FSR log time', fsr_log_time)
+        print("{:.3f}\t{:.3f}\r".format(L, R))
+
 
         # time.sleep(0.01)
 if __name__ == '__main__':

@@ -11,7 +11,7 @@ class Exo:
         self.mtr_type = "AK80-9"
         self.control_freq_Hz = 100
         self.frame_length = 100  # Window size (in frames)
-        self.frame_length_task = 100  # Window size for task estimator (in frames)
+        self.frame_length_task = 200  # Window size for task estimator (in frames)
 
         # biotorque parameters
         self.scale_factor = 0.20
