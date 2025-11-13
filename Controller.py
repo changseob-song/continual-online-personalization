@@ -6,7 +6,7 @@ from OnlineAdaptator import OnlineAdaptator
 from Utils_Mocap_trigger import Mocap_trigger
 from Utils_GPIO import GPIO_control
 from Utils_Teleplot import Teleplot
-from Utils import lowpass_filter, fast_roll, inference_worker, cleanup_can, save_data, cartesian_to_percentage, NumpyCompatUnpickler, causal_filter
+from Utils import lowpass_filter, fast_roll, gait_phase_inference_worker, task_inference_worker, cleanup_can, save_data, cartesian_to_percentage, NumpyCompatUnpickler, causal_filter
 from Exo import Exo
 from scipy.signal import find_peaks
 
@@ -81,16 +81,22 @@ class Controller:
         self.lpf = lowpass_filter()
 
         # Initialize queues for multiprocessing
-        self.input_q = mp.Queue()
-        self.output_q = mp.Queue()
+        self.gait_phase_input_q = mp.Queue()
+        self.gait_phase_output_q = mp.Queue()
+        self.task_input_q = mp.Queue()
+        self.task_output_q = mp.Queue()
 
-        # Start inference_worker process
-        self.inference_process = mp.Process(target=inference_worker,
-                                    args=(self.input_q, self.output_q, self.trt_engine_path, self.trt_task_estimator_path,
-                                            input_mean_path, input_std_path,label_mean_path, label_std_path,
-                                            input_mean_task_estimator_path, input_std_task_estimator_path, label_mean_task_estimator_path, label_std_task_estimator_path,
-                                            self.num_input_features, self.Exo.frame_length, self.Exo.frame_length_task))
-        self.inference_process.start()
+        # Start gait_phase_inference_worker process
+        self.gait_phase_inference_process = mp.Process(target=gait_phase_inference_worker,
+                                            args=(self.gait_phase_input_q, self.gait_phase_output_q, self.trt_engine_path,
+                                                  self.num_input_features, self.Exo.frame_length))
+        self.gait_phase_inference_process.start()
+
+        # Start task_inference_worker process
+        self.task_inference_process = mp.Process(target=task_inference_worker,
+                                           args=(self.task_input_q, self.task_output_q, self.trt_task_estimator_path,
+                                                 self.num_input_features, self.Exo.frame_length_task))
+        self.task_inference_process.start()
 
         # Extract linear layer weights and biases from the PyTorch model
         state_dict = torch.load(self.pt_model_linear_path, map_location="cpu", weights_only=True)
@@ -149,6 +155,8 @@ class Controller:
 
         update_time_R, update_time_L = 0.0, 0.0
         avg_loss_R, avg_loss_L = 0.0, 0.0
+        inference_time, gp_inference_time, task_inference_time = 0.0, 0.0, 0.0
+        queue_empty_count = 0
 
         # Create local references to data arrays for faster access
         log_timestamp = self.data_to_save['timestamp']
@@ -294,14 +302,24 @@ class Controller:
                     avg_loss_L = avg_loss;  update_time_L = update_time
 
             # 5. TensorRT inference & Apply linear layer weights and biases
-            self.input_q.put((model_input_arr[0, :, :].copy(), model_input_arr[1, :, :].copy(), model_input_arr_task[0, :, :].copy(), model_input_arr_task[1, :, :].copy()))
+            self.gait_phase_input_q.put((model_input_arr[0, :, :].copy(), model_input_arr[1, :, :].copy()))
+            self.task_input_q.put((model_input_arr_task[0, :, :].copy(), model_input_arr_task[1, :, :].copy()))
+            
             try:
-                model_output_l_val, model_output_r_val, model_output_l_task, model_output_r_task = self.output_q.get_nowait()
+                model_output_l_val, model_output_r_val, gp_inference_time = self.gait_phase_output_q.get_nowait()
                 last_model_output_l, last_model_output_r = model_output_l_val, model_output_r_val
-                last_model_output_l_task, last_model_output_r_task = model_output_l_task, model_output_r_task
+                queue_empty_count = 0
             except mp.queues.Empty:
                 model_output_l_val, model_output_r_val = last_model_output_l, last_model_output_r
+                queue_empty_count += 1
+
+            try:
+                model_output_l_task, model_output_r_task, task_inference_time = self.task_output_q.get_nowait()
+                last_model_output_l_task, last_model_output_r_task = model_output_l_task, model_output_r_task
+            except mp.queues.Empty:
                 model_output_l_task, model_output_r_task = last_model_output_l_task, last_model_output_r_task
+            
+            inference_time = gp_inference_time + task_inference_time
 
             # Apply linear layer weights and biases
             model_output_l_val = np.dot(model_output_l_val.flatten(), self.linear_weights_L.T)
@@ -322,8 +340,10 @@ class Controller:
             elif (gait_phase_R_prev <= 3) and (gait_phase_R > 80): gait_phase_R = gait_phase_R_prev
             else: gait_phase_R_prev = gait_phase_R
 
-            delayed_gait_phase_L = (gait_phase_L - self.Exo.delay_factor) % 100
-            delayed_gait_phase_R = (gait_phase_R - self.Exo.delay_factor) % 100
+            # delayed_gait_phase_L = (gait_phase_L - self.Exo.delay_factor) % 100
+            # delayed_gait_phase_R = (gait_phase_R - self.Exo.delay_factor) % 100
+            delayed_gait_phase_L = gait_phase_L
+            delayed_gait_phase_R = gait_phase_R
 
             # if loop_index / self.Exo.control_freq_Hz >= self.pulse_after_start:
             #     gradual_torque_scale = min(1.0, ((loop_index / self.Exo.control_freq_Hz) - self.pulse_after_start) / self.adjustment_duration)
@@ -447,7 +467,11 @@ class Controller:
                 "cmd_R": motor_cmd_val_R,
                 "update_time_L": update_time_L,
                 "update_time_R": update_time_R,
+                "avg_loss_L": avg_loss_L,
+                "avg_loss_R": avg_loss_R,
                 "loop_time_exceeded": loop_time_exceeded,
+                "inference_time": inference_time,
+                "queue_empty_count": queue_empty_count,
             }
             self.teleplot.sendBatchTelemetry(telemetry_data)
 

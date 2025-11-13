@@ -10,12 +10,12 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting'
-    trial_name = 'insole-ab-test'
+    trial_name = 'test3_exo_off'
     pulse_after_start = 0  # seconds
-    trial_dur_sec = 30*2 #15*2  # seconds
+    trial_dur_sec = 60*1 #15*2  # seconds
     adjustment_duration = 10  # seconds
-    exo_ON = True
-    adaptation_ON = False
+    exo_ON = False
+    adaptation_ON = True
     replay_buffer_ON = False
 
     # Trigger setting
