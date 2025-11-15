@@ -155,8 +155,7 @@ class Controller:
 
         update_time_R, update_time_L = 0.0, 0.0
         avg_loss_R, avg_loss_L = 0.0, 0.0
-        inference_time, gp_inference_time, task_inference_time = 0.0, 0.0, 0.0
-        queue_empty_count = 0
+        gp_loop_index, task_loop_index = 0, 0
 
         # Create local references to data arrays for faster access
         log_timestamp = self.data_to_save['timestamp']
@@ -181,7 +180,7 @@ class Controller:
         first_pulse_end_time = None
         second_pulse_sent = False
         second_pulse_end_time = None
-        loop_index = 1
+        loop_index = 0
 
         # Wait for the trigger to start the trial
         if self.trigger_type == "mocap":
@@ -302,25 +301,23 @@ class Controller:
                     avg_loss_L = avg_loss;  update_time_L = update_time
 
             # 5. TensorRT inference & Apply linear layer weights and biases
-            self.gait_phase_input_q.put((model_input_arr[0, :, :].copy(), model_input_arr[1, :, :].copy()))
-            self.task_input_q.put((model_input_arr_task[0, :, :].copy(), model_input_arr_task[1, :, :].copy()))
+            if self.gait_phase_output_q.empty():
+                self.gait_phase_input_q.put((model_input_arr[0, :, :].copy(), model_input_arr[1, :, :].copy(), loop_index))
+            if self.task_output_q.empty():
+                self.task_input_q.put((model_input_arr_task[0, :, :].copy(), model_input_arr_task[1, :, :].copy(), loop_index))
             
             try:
-                model_output_l_val, model_output_r_val, gp_inference_time = self.gait_phase_output_q.get_nowait()
+                model_output_l_val, model_output_r_val, gp_loop_index = self.gait_phase_output_q.get_nowait()
                 last_model_output_l, last_model_output_r = model_output_l_val, model_output_r_val
-                queue_empty_count = 0
             except mp.queues.Empty:
                 model_output_l_val, model_output_r_val = last_model_output_l, last_model_output_r
-                queue_empty_count += 1
 
             try:
-                model_output_l_task, model_output_r_task, task_inference_time = self.task_output_q.get_nowait()
+                model_output_l_task, model_output_r_task, task_loop_index = self.task_output_q.get_nowait()
                 last_model_output_l_task, last_model_output_r_task = model_output_l_task, model_output_r_task
             except mp.queues.Empty:
                 model_output_l_task, model_output_r_task = last_model_output_l_task, last_model_output_r_task
             
-            inference_time = gp_inference_time + task_inference_time
-
             # Apply linear layer weights and biases
             model_output_l_val = np.dot(model_output_l_val.flatten(), self.linear_weights_L.T)
             model_output_l_val += self.linear_biases_L
@@ -350,8 +347,8 @@ class Controller:
             # else:
             #     gradual_torque_scale = 0.0
 
-            gradual_torque_scale_L = 1 # np.max((1 - avg_loss_L), 0)
-            gradual_torque_scale_R = 1 # np.max((1 - avg_loss_R), 0)
+            gradual_torque_scale_L = np.max((1 - avg_loss_L/0.75), 0)
+            gradual_torque_scale_R = np.max((1 - avg_loss_R/0.75), 0)
 
             # 6.1 Get the task estimation outputs
             model_output_l_task_denorm = model_output_l_task * self.label_std_task + self.label_mean_task
@@ -455,10 +452,6 @@ class Controller:
                 "fsr_R": fsr_R,
                 "gait_phase_L": gait_phase_L,
                 "gait_phase_R": gait_phase_R,
-                "incline_L_cont": incline_pred_L,
-                "incline_R_cont": incline_pred_R,
-                "speed_L_cont": speed_pred_L,
-                "speed_R_cont": speed_pred_R,
                 "incline_L_disc": current_incline_L,
                 "incline_R_disc": current_incline_R,
                 "speed_L_disc": current_speed_L,
@@ -470,8 +463,8 @@ class Controller:
                 "avg_loss_L": avg_loss_L,
                 "avg_loss_R": avg_loss_R,
                 "loop_time_exceeded": loop_time_exceeded,
-                "inference_time": inference_time,
-                "queue_empty_count": queue_empty_count,
+                "gp_inference": (gp_loop_index-loop_index),
+                "task_inference": (task_loop_index-loop_index),
             }
             self.teleplot.sendBatchTelemetry(telemetry_data)
 

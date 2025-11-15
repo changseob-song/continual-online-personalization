@@ -188,16 +188,14 @@ def gait_phase_inference_worker(input_q, output_q, trt_engine_path,
                 print("Gait Phase Worker: Stop signal received. Exiting.")
                 break
 
-            model_input_arr_l, model_input_arr_r = data_in
+            model_input_arr_l, model_input_arr_r, loop_index = data_in
 
-            start_time = time.time()
             # Gait phase estimation
             output_shape = (80, 100)  # Assuming scalar output from model
             model_output_l = trt_inference(model_input_arr_l, output_shape, context)
             model_output_r = trt_inference(model_input_arr_r, output_shape, context)
 
-            inference_time = time.time() - start_time
-            output_q.put((model_output_l, model_output_r, inference_time))
+            output_q.put((model_output_l, model_output_r, loop_index))
         except Exception as e:
             print(f"Gait Phase Worker: Error during inference: {e}")
             break
@@ -236,16 +234,14 @@ def task_inference_worker(input_q, output_q, trt_task_estimator_path,
                 print("Task Worker: Stop signal received. Exiting.")
                 break
 
-            model_input_arr_task_l, model_input_arr_task_r = data_in
+            model_input_arr_task_l, model_input_arr_task_r, loop_index = data_in
 
-            start_time = time.time()
             # Task estimation
             output_shape_task = (2,)
             model_output_task_l = trt_inference(model_input_arr_task_l, output_shape_task, context_task)
             model_output_task_r = trt_inference(model_input_arr_task_r, output_shape_task, context_task)
 
-            inference_time = time.time() - start_time
-            output_q.put((model_output_task_l, model_output_task_r, inference_time))
+            output_q.put((model_output_task_l, model_output_task_r, loop_index))
         except Exception as e:
             print(f"Task Worker: Error during inference: {e}")
             break

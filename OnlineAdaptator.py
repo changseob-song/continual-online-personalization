@@ -69,37 +69,6 @@ def interpolate_two_cycles(cycle1, cycle2, weight):
     interpolated_cycle = cycle1_upsampled * weight + cycle2_upsampled * (1 - weight)
     return interpolated_cycle
 
-def determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, inclinations_all, speeds_all):
-    combined_rmse_min = float('inf')
-    for incline in inclinations_all:
-        for speed in speeds_all:
-            if incline != 'LG' and speed not in ['0p4mps', '0p6mps', '0p8mps', '1p0mps']: continue
-            if (incline == 'RD_10deg') and speed in ['0p4mps', '0p6mps']: continue
-            for gc in range(2):
-                ab_avg_cycle = ab_avg_input[incline][speed][gc].T[:, 4]  # shape: (n_features, n_samples)
-                # Extract the latest gait cycle from input_data
-                if gc == 0:
-                    start_idx = 0
-                    end_idx = mid_peak_idx[0]
-                elif gc == 1:
-                    start_idx = mid_peak_idx[0]
-                    end_idx = len(mtr_pos_stream)
-                current_cycle = input_data[start_idx:end_idx][:, 4] # gyro_Y
-
-                rmse, len_rmse = get_congruency_rmse_1d(current_cycle, ab_avg_cycle)
-                combined_rmse = rmse + (len_rmse * 0.25)
-                if combined_rmse < combined_rmse_min:
-                    combined_rmse_min = combined_rmse
-                    rmse_min = rmse
-                    len_rmse_min = len_rmse
-                    best_incline = incline
-                    best_speed = speed
-    
-                # print(mid_peak_idx, len(mtr_pos_stream), len(current_cycle), len(ab_avg_cycle), rmse_min)
-    # print(f"RMSE: {rmse_min:.3f}, Length RMSE: {len_rmse_min}")
-    return best_incline, best_speed, combined_rmse_min
-
-
 def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, adaptation_ON=False, replay_buffer_ON=False):
     """
     This worker process handles the fine-tuning of the model.
@@ -155,13 +124,9 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
             model = model_R if side == 'R' else model_L
             optimizer = optimizer_R if side == 'R' else optimizer_L
 
-            # Determine the task by comparing congruency with AB average input
-            # incline, speed, rmse_min = determine_task(input_data, mtr_pos_stream, mid_peak_idx, ab_avg_input, inclinations_all, speeds_all)
-            # print(f"\nDetected task - Incline: {incline}, Speed: {speed} with congruency RMSE: {rmse_min:.2f} for side {side}")
-
-            # if bin_state[incline][speed] == 1:
-            #     input_data = interpolate_two_cycles(input_data.T, input_stream[incline][speed].T, weight=0.5)
-            #     input_data = input_data.T  # Transpose back to (length, channel num)
+            if bin_state[incline][speed] == 1:
+                input_data = interpolate_two_cycles(input_data.T, input_stream[incline][speed].T, weight=0.5)
+                input_data = input_data.T  # Transpose back to (length, channel num)
 
             if adaptation_ON:
                 # Prepare data loader for the current task
@@ -228,11 +193,12 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
                     logits = model(input_batch)
                     loss = criterion(logits, label_batch)
 
-                    loss.backward()
-                    optimizer.step()
-                    tloss += loss.item()
-                    num_batches += 1
-
+                    if loss < 0.75:
+                        loss.backward()
+                        optimizer.step()
+                        tloss += loss.item()
+                        num_batches += 1
+                        
                 avg_loss = tloss / num_batches if num_batches > 0 else 0
             # print("avg loss: ", avg_loss)
 
