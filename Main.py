@@ -10,13 +10,16 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting'
-    trial_name = 'test'
-    pulse_after_start = 0  # seconds
-    trial_dur_sec = 60*10 #15*2  # seconds
+    subject = 'test'
+
+    trial_name = f'{subject}-task_estimator'
+
+    pulse_after_start = 2  # seconds
+    trial_dur_sec = 15*11+5  # seconds
     adjustment_duration = 10  # seconds
     exo_ON = True
-    adaptation_ON = True
-    replay_buffer_ON = True
+    adaptation_ON = False
+    replay_buffer_ON = False
 
     # Trigger setting
     trigger_type = "typing"  # "mocap" or "typing"
@@ -26,11 +29,11 @@ if __name__ == '__main__':
 
     # Model path
     # tcn_only
-    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-test/heel_strike-test_tcn.trt'
+    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-RD_GRF_flipped/heel_strike-RD_GRF_flipped_tcn.trt'
     # entire model (TCN + linear layer)
-    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-test/heel_strike-test.pt'
+    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-RD_GRF_flipped/heel_strike-RD_GRF_flipped.pt'
     # task estimator path
-    trt_task_estimator_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/task_estimator-input_modality_6_window_size_200/task_estimator-input_modality_6.trt'
+    trt_task_estimator_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/task_estimator-transferred/task_estimator-transferred.trt'
     # torque profile path
     torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE/torque_splines.pkl'
     

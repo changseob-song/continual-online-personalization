@@ -32,21 +32,6 @@ class Controller:
         with open(torque_profile_path, "rb") as f:
             self.torque_profile = NumpyCompatUnpickler(f).load()
 
-        # Initialize data structures to save data
-        max_samples = int((self.trial_dur_sec + self.pulse_after_start) * 100)
-        self.data_to_save = {
-            'timestamp': np.zeros(max_samples),
-            'mtr_pos_L': np.zeros(max_samples), 'mtr_pos_R': np.zeros(max_samples),
-            'mtr_vel_L': np.zeros(max_samples), 'mtr_vel_R': np.zeros(max_samples),
-            'imu_L': np.zeros((max_samples, 6)), 'imu_R': np.zeros((max_samples, 6)),
-            'fsr_L': np.zeros(max_samples), 'fsr_R': np.zeros(max_samples),
-            'mtr_cmd_L': np.zeros(max_samples), 'mtr_cmd_R': np.zeros(max_samples),
-            'gait_phase_L': np.zeros(max_samples), 'gait_phase_R': np.zeros(max_samples),
-            'incline_L': ['']*max_samples, 'speed_L': ['']*max_samples,
-            'incline_R': ['']*max_samples, 'speed_R': ['']*max_samples,
-            'gpio_output': np.zeros(max_samples)  # GPIO output state
-        }
-
         # Initialize Teleplot for telemetry data
         self.teleplot = Teleplot()
 
@@ -65,10 +50,11 @@ class Controller:
 
         self.input_mean = np.load(input_mean_path); self.input_std = np.load(input_std_path)
         self.label_mean = np.load(label_mean_path); self.label_std = np.load(label_std_path)
-        self.num_input_features = self.input_mean.shape[0]
-
         self.input_mean_task = np.load(input_mean_task_estimator_path);   self.input_std_task = np.load(input_std_task_estimator_path)
         self.label_mean_task = np.load(label_mean_task_estimator_path);   self.label_std_task = np.load(label_std_task_estimator_path)
+    
+        self.num_input_features = self.input_mean.shape[0]
+        self.num_input_features_task = self.input_mean_task.shape[0]
 
         # Initialize the exoskeleton
         if self.trigger_type == "mocap":
@@ -95,7 +81,7 @@ class Controller:
         # Start task_inference_worker process
         self.task_inference_process = mp.Process(target=task_inference_worker,
                                            args=(self.task_input_q, self.task_output_q, self.trt_task_estimator_path,
-                                                 self.num_input_features, self.Exo.frame_length_task))
+                                                 self.num_input_features_task, self.Exo.frame_length_task))
         self.task_inference_process.start()
 
         # Extract linear layer weights and biases from the PyTorch model
@@ -127,7 +113,7 @@ class Controller:
 
         # Rolling array initialization of model output array (2xframe_length)
         model_input_arr = np.zeros((2, self.num_input_features, self.Exo.frame_length), dtype=np.float32)
-        model_input_arr_task = np.zeros((2, self.num_input_features, self.Exo.frame_length_task), dtype=np.float32)
+        model_input_arr_task = np.zeros((2, self.num_input_features_task, self.Exo.frame_length_task), dtype=np.float32)
         # Predefine input stream data size for online adaptation (6 seconds buffer)
         input_stream_data = np.zeros((2, self.num_input_features, 6 * self.Exo.control_freq_Hz), dtype=np.float32)  # 100 frames of input data
         motor_cmd_array = np.zeros((2, self.Exo.frame_length), dtype=np.float32)  # for torque command filtering
@@ -147,15 +133,31 @@ class Controller:
         model_output_r_val = last_model_output_r; model_output_l_val = last_model_output_l
         model_output_r_task = last_model_output_r_task; model_output_l_task = last_model_output_l_task
 
-        incline_thresholds = [-7.5, -2.5, 2.5, 7.5]
-        incline_values = [-10, -5, 0, 5, 10]
-        speed_thresholds = [0.3, 0.5, 0.7, 0.9, 1.1, 1.3]
-        speed_values = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4]
-        speed_values_incline = [0.4, 0.6, 0.8, 1.0]
+        incline_values = [-10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10]
+        incline_thresholds = [(incline_values[i] + incline_values[i+1]) / 2 for i in range(len(incline_values)-1)]
+
+        speed_values = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4]
+        speed_thresholds = [(speed_values[i] + speed_values[i+1]) / 2 for i in range(len(speed_values)-1)]
 
         update_time_R, update_time_L = 0.0, 0.0
         avg_loss_R, avg_loss_L = 0.0, 0.0
         gp_loop_index, task_loop_index = 0, 0
+
+        # Initialize data structures to save data
+        max_samples = int((self.trial_dur_sec + self.pulse_after_start) * 100)
+        self.data_to_save = {
+            'timestamp': np.zeros(max_samples),
+            'mtr_pos_L': np.zeros(max_samples), 'mtr_pos_R': np.zeros(max_samples),
+            'mtr_vel_L': np.zeros(max_samples), 'mtr_vel_R': np.zeros(max_samples),
+            'imu_L': np.zeros((max_samples, 6)), 'imu_R': np.zeros((max_samples, 6)),
+            'fsr_L': np.zeros(max_samples), 'fsr_R': np.zeros(max_samples),
+            'mtr_cmd_L': np.zeros(max_samples), 'mtr_cmd_R': np.zeros(max_samples),
+            'gait_phase_L': np.zeros(max_samples), 'gait_phase_R': np.zeros(max_samples),
+            'incline_L': ['']*max_samples, 'speed_L': ['']*max_samples,
+            'incline_R': ['']*max_samples, 'speed_R': ['']*max_samples,
+            'avg_loss_L': np.zeros(max_samples), 'avg_loss_R': np.zeros(max_samples),
+            'gpio_output': np.zeros(max_samples)  # GPIO output state
+        }
 
         # Create local references to data arrays for faster access
         log_timestamp = self.data_to_save['timestamp']
@@ -165,14 +167,15 @@ class Controller:
         log_fsr_L, log_fsr_R = self.data_to_save['fsr_L'], self.data_to_save['fsr_R']
         log_mtr_cmd_L, log_mtr_cmd_R = self.data_to_save['mtr_cmd_L'], self.data_to_save['mtr_cmd_R']
         log_gait_phase_L, log_gait_phase_R = self.data_to_save['gait_phase_L'], self.data_to_save['gait_phase_R']
+        log_avg_loss_L, log_avg_loss_R = self.data_to_save['avg_loss_L'], self.data_to_save['avg_loss_R']
 
         log_incline_L, log_speed_L = self.data_to_save['incline_L'], self.data_to_save['speed_L']
         log_incline_R, log_speed_R = self.data_to_save['incline_R'], self.data_to_save['speed_R']
         log_gpio_output = self.data_to_save['gpio_output']
 
-        current_incline_L = 0; current_speed_L = 0.2  # Default task settings
+        current_incline_L = 0; current_speed_L = np.min(speed_values)  # Default task settings
         prev_incline_L = current_incline_L; prev_speed_L = current_speed_L
-        current_incline_R = 0; current_speed_R = 0.2  # Default task settings
+        current_incline_R = 0; current_speed_R = np.min(speed_values)  # Default task settings
         prev_incline_R = current_incline_R; prev_speed_R = current_speed_R
 
         # Start recording time
@@ -212,20 +215,21 @@ class Controller:
 
             # 2.1 Read the FSR values
             if loop_index % 2 == 0:
-                fsr_L = self.Exo.fsr_adc.read_FSR(0)
+                fsr_L = 0 #self.Exo.fsr_adc.read_FSR(0)
             else:
-                fsr_R = self.Exo.fsr_adc.read_FSR(1)
+                fsr_R = 0 #self.Exo.fsr_adc.read_FSR(1)
             log_fsr_L[loop_index] = fsr_L; log_fsr_R[loop_index] = fsr_R
 
             # 3. Mirror the left data to the right side (Unilateral model input)
-            imu_L_reflected = imu_L.copy()
+            imu_L_reflected, imu_R_reflected = imu_L.copy(), imu_R.copy()
             imu_L_reflected[1] *= -1; imu_L_reflected[3] *= -1; imu_L_reflected[5] *= -1
+            imu_R_reflected[1] *= -1; imu_R_reflected[3] *= -1; imu_R_reflected[5] *= -1
 
             # 4. Prepare the model input data
-            left_data[:6], right_data[:6] = imu_L_reflected, imu_R
+            left_data, right_data = imu_L_reflected, imu_R
 
             left_data_norm, right_data_norm = (left_data - self.input_mean) / self.input_std, (right_data - self.input_mean) / self.input_std
-            left_data_norm_task, right_data_norm_task = (left_data - self.input_mean_task) / self.input_std_task, (right_data - self.input_mean_task) / self.input_std_task
+            left_data_norm_task, right_data_norm_task = (left_data[:6] - self.input_mean_task) / self.input_std_task, (right_data[:6] - self.input_mean_task) / self.input_std_task
 
             model_input_arr = fast_roll(model_input_arr)
             model_input_arr[0, :, -1], model_input_arr[1, :, -1] = left_data_norm, right_data_norm
@@ -247,9 +251,9 @@ class Controller:
                 recent_fsr_L = self.data_to_save['fsr_L'][search_start_idx:loop_index]
                 recent_fsr_R = self.data_to_save['fsr_R'][search_start_idx:loop_index]
 
-                heelstrike_indices_L = self.detect_heel_strike(recent_fsr_L, self.Exo.fsr_threshold, min_interval=30)
+                heelstrike_indices_L = self.detect_heel_strike(recent_fsr_L, self.Exo.fsr_threshold_L, min_interval=50)
                 heelstrike_indices_L += (search_start_idx)  # Convert to absolute indices
-                heelstrike_indices_R = self.detect_heel_strike(recent_fsr_R, self.Exo.fsr_threshold, min_interval=30)
+                heelstrike_indices_R = self.detect_heel_strike(recent_fsr_R, self.Exo.fsr_threshold_R, min_interval=50)
                 heelstrike_indices_R += (search_start_idx)  # Convert to absolute indices
 
                 buffer_start_abs = loop_index - len(input_stream_data[0, 0, :])
@@ -330,25 +334,25 @@ class Controller:
             gait_phase_L, gait_phase_R = cartesian_to_percentage(model_output_l_denorm), cartesian_to_percentage(model_output_r_denorm)
 
             # Store previous gait phase if decreasing 
-            if (3 < gait_phase_L_prev < 97) and (gait_phase_L < gait_phase_L_prev): gait_phase_L = gait_phase_L_prev
-            elif (gait_phase_L_prev <= 3) and (gait_phase_L > 80): gait_phase_L = gait_phase_L_prev
-            else: gait_phase_L_prev = gait_phase_L
-            if (3 < gait_phase_R_prev < 97) and (gait_phase_R < gait_phase_R_prev): gait_phase_R = gait_phase_R_prev
-            elif (gait_phase_R_prev <= 3) and (gait_phase_R > 80): gait_phase_R = gait_phase_R_prev
+            if (3 < gait_phase_L_prev < 93) and (gait_phase_L < gait_phase_L_prev): gait_phase_L = gait_phase_L_prev # handle the case that decreases suddenly
+            elif (gait_phase_L_prev <= 5) and (gait_phase_L > 75): gait_phase_L = gait_phase_L_prev # handle the case that suddenly jump back (from low to high)
+            elif (gait_phase_L - gait_phase_L_prev) > 30: gait_phase_L = gait_phase_L_prev  # handle the case that suddenly jump forward
+            else: gait_phase_L_prev = gait_phase_L # update normally
+            if (3 < gait_phase_R_prev < 93) and (gait_phase_R < gait_phase_R_prev): gait_phase_R = gait_phase_R_prev
+            elif (gait_phase_R_prev <= 5) and (gait_phase_R > 75): gait_phase_R = gait_phase_R_prev
+            elif (gait_phase_R - gait_phase_R_prev) > 30: gait_phase_R = gait_phase_R_prev
             else: gait_phase_R_prev = gait_phase_R
 
-            # delayed_gait_phase_L = (gait_phase_L - self.Exo.delay_factor) % 100
-            # delayed_gait_phase_R = (gait_phase_R - self.Exo.delay_factor) % 100
-            delayed_gait_phase_L = gait_phase_L
-            delayed_gait_phase_R = gait_phase_R
+            delayed_gait_phase_L = (gait_phase_L - self.Exo.delay_factor) % 100
+            delayed_gait_phase_R = (gait_phase_R - self.Exo.delay_factor) % 100
 
             # if loop_index / self.Exo.control_freq_Hz >= self.pulse_after_start:
             #     gradual_torque_scale = min(1.0, ((loop_index / self.Exo.control_freq_Hz) - self.pulse_after_start) / self.adjustment_duration)
             # else:
             #     gradual_torque_scale = 0.0
 
-            gradual_torque_scale_L = np.max((1 - avg_loss_L/0.75), 0)
-            gradual_torque_scale_R = np.max((1 - avg_loss_R/0.75), 0)
+            gradual_torque_scale_L = np.max((1 - avg_loss_L/0.5), 0)
+            gradual_torque_scale_R = np.max((1 - avg_loss_R/0.5), 0)
 
             # 6.1 Get the task estimation outputs
             model_output_l_task_denorm = model_output_l_task * self.label_std_task + self.label_mean_task
@@ -368,9 +372,6 @@ class Controller:
                 current_incline_L = incline_values[np.searchsorted(incline_thresholds, inc_pred_mean)]
                 current_speed_L = speed_values[np.searchsorted(speed_thresholds, spd_pred_mean)]
 
-                if current_incline_L != 0 and current_speed_L not in speed_values_incline:
-                    current_incline_L = prev_incline_L; current_speed_L = prev_speed_L
-
                 motor_cmd_val_L = self.torque_profile[current_incline_L][current_speed_L][int(delayed_gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_L
                 prev_incline_L = current_incline_L; prev_speed_L = current_speed_L
             else:
@@ -381,9 +382,6 @@ class Controller:
                 # Discretize incline prediction
                 current_incline_R = incline_values[np.searchsorted(incline_thresholds, inc_pred_mean)]
                 current_speed_R = speed_values[np.searchsorted(speed_thresholds, spd_pred_mean)]
-
-                if current_incline_R != 0 and current_speed_R not in speed_values_incline:
-                    current_incline_R = prev_incline_R; current_speed_R = prev_speed_R
 
                 motor_cmd_val_R = self.torque_profile[current_incline_R][current_speed_R][int(delayed_gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_R
                 prev_incline_R = current_incline_R; prev_speed_R = current_speed_R
@@ -454,8 +452,12 @@ class Controller:
                 "gait_phase_R": gait_phase_R,
                 "incline_L_disc": current_incline_L,
                 "incline_R_disc": current_incline_R,
+                "incline_L_pred": incline_pred_L,
+                "incline_R_pred": incline_pred_R,
                 "speed_L_disc": current_speed_L,
                 "speed_R_disc": current_speed_R,
+                "speed_L_pred": speed_pred_L,
+                "speed_R_pred": speed_pred_R,
                 "cmd_L": motor_cmd_val_L,
                 "cmd_R": motor_cmd_val_R,
                 "update_time_L": update_time_L,

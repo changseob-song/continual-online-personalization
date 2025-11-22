@@ -105,43 +105,56 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
 
     adaptation_worker_warmup(model_R, optimizer_R, criterion, device, model_path, input_mean, input_std, label_mean, label_std)
 
-    incline_values = [-10, -5, 0, 5, 10]
-    speed_values = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4]
+    incline_values = [-10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10]
+    speed_values = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4]
     bin_state = {inc: {spd: {side: 0 for side in ['L', 'R']} for spd in speed_values} for inc in incline_values}
     input_stream = {inc: {spd: None for spd in speed_values} for inc in incline_values}
     train_loader = {inc: {spd: {side: None for side in ['L', 'R']} for spd in speed_values} for inc in incline_values}
     avg_loss = 0
+    misdetection_flag = False
+    misdetection_threshold = 200
 
     # Main loop to wait for data and fine-tune
     while True:
         try:
             # Wait for data from the main controller
             side, incline, speed, input_data, mid_peak_idx = input_q.get() # input data shape : (length, channel num)
+            print(f'current incline: {incline}, speed: {speed}')
 
             start_time = time.time()
+
+            # Detect the heelstrike misdetection
+            if (mid_peak_idx[0] > misdetection_threshold) or (input_data.shape[0] - mid_peak_idx[-1] > misdetection_threshold) or (np.diff(mid_peak_idx) > misdetection_threshold).any():
+                misdetection_flag = True
+            else:
+                misdetection_flag = False
 
             # Determine either left or right side
             model = model_R if side == 'R' else model_L
             optimizer = optimizer_R if side == 'R' else optimizer_L
 
-            if bin_state[incline][speed] == 1:
+            # Interpolate with previous data if available
+            if bin_state[incline][speed] == 1 and (not misdetection_flag):
                 input_data = interpolate_two_cycles(input_data.T, input_stream[incline][speed].T, weight=0.5)
                 input_data = input_data.T  # Transpose back to (length, channel num)
 
             if adaptation_ON:
+                
                 # Prepare data loader for the current task
-                dataset = LoadData(side, incline, speed, input_data, mid_peak_idx, model_path, input_mean, input_std, label_mean, label_std)
-                if not dataset.initilized: continue # Skip if dataset returns nothing
+                if not misdetection_flag:
+                    dataset = LoadData(side, incline, speed, input_data, mid_peak_idx, model_path, input_mean, input_std, label_mean, label_std)
+                    if not dataset.initilized: continue # Skip if dataset returns nothing
 
-                train_indices = list(range(len(dataset)))
-                subset = Subset(dataset, train_indices)
+                    train_indices = list(range(len(dataset)))
+                    subset = Subset(dataset, train_indices)
 
-                bin_state[incline][speed][side] = 1
-                input_stream[incline][speed] = input_data
-                train_loader[incline][speed][side] = DataLoader(subset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True) # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
+                    bin_state[incline][speed][side] = 1
+                    input_stream[incline][speed] = input_data
+                    train_loader[incline][speed][side] = DataLoader(subset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True) # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
 
                 train_loader_combined_list = []
                 sampled_bins = []
+
                 if replay_buffer_ON:
                     # Get the positive bins excluding the current task
                     positive_bins = [(inc, spd) for inc in incline_values for spd in speed_values if (bin_state[inc][spd][side] > 0) and not (inc == incline and spd == speed)]
@@ -156,16 +169,14 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
                     for inc, spd in sampled_bins:
                         # This check is redundant now but safe to keep
                         if (inc == incline) and (spd == speed): continue
-                        print(f"Adaptation Worker: Including data from {side}-{inc}-{spd} for training. {len(train_loader[inc][spd][side].dataset)} samples.")
+                        # print(f"Adaptation Worker: Including data from {side}-{inc}-{spd} for training. {len(train_loader[inc][spd][side].dataset)} samples.")
                         train_loader_combined_list.append(train_loader[inc][spd][side])
 
                     if train_loader_combined_list:
                         train_loader_combined = torch.utils.data.ConcatDataset([loader.dataset for loader in train_loader_combined_list])
-                        # if side == 'R':
-                            # print(f"Adaptation Worker: Total training samples combined: {len(train_loader_combined)}")
                         train_loader_combined = DataLoader(train_loader_combined, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
                     else:
-                        train_loader_combined = train_loader[incline][speed][side]
+                        train_loader_combined = train_loader[incline][speed][side] # Fallback to current task only
                 
                 elif not replay_buffer_ON: # No replay buffer, only use current task (double epochs)
                     train_loader_combined = train_loader[incline][speed][side]
@@ -193,14 +204,14 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
                     logits = model(input_batch)
                     loss = criterion(logits, label_batch)
 
-                    if loss < 0.75:
+                    if loss < 1.0:
                         loss.backward()
                         optimizer.step()
                         tloss += loss.item()
                         num_batches += 1
                         
                 avg_loss = tloss / num_batches if num_batches > 0 else 0
-            # print("avg loss: ", avg_loss)
+            print("avg loss: ", avg_loss)
 
             # After training, get the updated weights and send them back
             updated_weights = model.linear.weight.data.clone().cpu().numpy()

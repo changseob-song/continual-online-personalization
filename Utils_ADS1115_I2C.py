@@ -36,8 +36,8 @@ def main():
         R = FSR_ADC.read_FSR(1)
         fsr_log_time = time.time() - fsr_log_start
 
-        teleplot.sendTelemetry('FSR1 value', L)
-        teleplot.sendTelemetry('FSR2 value', R)
+        teleplot.sendTelemetry('FSR L value', L)
+        teleplot.sendTelemetry('FSR R value', R)
         print("{:.3f}\t{:.3f}\r".format(L, R))
 
 

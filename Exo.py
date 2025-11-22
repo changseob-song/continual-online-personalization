@@ -27,8 +27,9 @@ class Exo:
         self.imus = ICM20948_I2C_IMUs()  # Back, Left hip, Right hip
 
         # FSR initialization
-        self.fsr_adc = ADS1115_I2C()
-        self.fsr_threshold = 20000  # Threshold value to detect foot contact
+        # self.fsr_adc = ADS1115_I2C()
+        self.fsr_threshold_L =32000  # Threshold value to detect foot contact
+        self.fsr_threshold_R = 32000  # Threshold value to detect foot contact
 
         # Specify the CAN interface and channel
         try:

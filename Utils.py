@@ -268,7 +268,7 @@ def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None)
 
     # Define data for motor CSV
     motor_cols = ['timestamp', 'mtr_pos_L', 'mtr_pos_R', 'mtr_vel_L', 'mtr_vel_R', 'fsr_L', 'fsr_R', 'gpio_output']
-    save_dataframe(f'{trial_name}_input_motor.csv', sliced_data, motor_cols)
+    save_dataframe(f'{trial_name}-input_motor.csv', sliced_data, motor_cols)
 
     # Define data for IMU CSV
     imu_df_data = {'timestamp': sliced_data['timestamp']}
@@ -282,14 +282,15 @@ def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None)
         imu_df_data['gpio_output'] = sliced_data['gpio_output']
 
     df_imu = pd.DataFrame(imu_df_data)
-    df_imu.to_csv(f'{trial_name}_input_imu.csv', index=False)
-    print(f'Data saved to {trial_name}_input_imu.csv. Dimensions: {df_imu.shape}')
+    df_imu.to_csv(f'{trial_name}-input_imu.csv', index=False)
+    print(f'Data saved to {trial_name}-input_imu.csv. Dimensions: {df_imu.shape}')
 
     # Define data for torque CSV
     torque_cols = ['timestamp', 'gait_phase_L', 'gait_phase_R', 
-                   'mtr_cmd_L', 'mtr_cmd_R', 
-                   'incline_L', 'speed_L', 'incline_R', 'speed_R', 'gpio_output']
-    save_dataframe(f'{trial_name}_output_torque.csv', sliced_data, torque_cols)
+                   'mtr_cmd_L', 'mtr_cmd_R',
+                   'incline_L', 'speed_L', 'incline_R', 'speed_R', 
+                   'avg_loss_L', 'avg_loss_R', 'gpio_output']
+    save_dataframe(f'{trial_name}-output_torque.csv', sliced_data, torque_cols)
 
 # Helper function to create and save DataFrame
 def save_dataframe(filename, data_dict, columns):
