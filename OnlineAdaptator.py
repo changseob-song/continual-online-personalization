@@ -146,11 +146,9 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
                 train_indices = list(range(len(dataset)))
                 subset = Subset(dataset, train_indices)
 
-                for incline in incline_values:
-                    for speed in speed_values:
-                        bin_state[incline][speed][side] = 1
-                        input_stream[incline][speed][side] = input_data
-                        train_loader[incline][speed][side] = DataLoader(subset, batch_size=16, shuffle=True, num_workers=0, pin_memory=True) # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
+                bin_state[incline][speed][side] = 1
+                input_stream[incline][speed][side] = input_data
+                train_loader[incline][speed][side] = DataLoader(subset, batch_size=16, shuffle=True, num_workers=0, pin_memory=True) # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
 
                 train_loader_combined_list = []
 
@@ -200,7 +198,7 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
                             rmse_bins[inc][spd] = torch.sqrt(torch.mean(error**2)).item()
                             # print(f"Adaptation Worker: {inc}-{spd}-{side}: {rmse_bins[inc][spd]:.2f} (RMSE)")
                         
-                    print(f"Adaptation Worker: RMSE computation time: {(time.time() - fp_time):.2f} seconds")
+                    # print(f"Adaptation Worker: RMSE computation time: {(time.time() - fp_time):.2f} seconds")
                     # Select top-k highest RMSE bins
                     k = min(min_replay_num, len(positive_bins))  # Choose up to 4
                     top_k_bins = sorted(positive_bins, key=lambda x: rmse_bins[x[0]][x[1]], reverse=True)[:k]
@@ -212,7 +210,7 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
                         if rmse_bins[inc][spd] > replay_threshold:
                             train_loader_combined_list.append(train_loader[inc][spd][side])
                             bins_for_replay.append((inc, spd))
-                        elif rmse_bins[inc][spd] <= replay_threshold:
+                        elif rmse_bins[inc][spd] <= replay_threshold: # Below threshold, include current task instead
                             train_loader_combined_list.append(train_loader[incline][speed][side])
                     
                     if bins_for_replay:
@@ -265,7 +263,7 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
             updated_weights = model.linear.weight.data.clone().cpu().numpy()
             updated_biases = model.linear.bias.data.clone().cpu().numpy()
 
-            output_q.put((side, avg_loss, start_idx, updated_weights, updated_biases))
+            output_q.put((side, avg_loss, rmse_bins, start_idx, updated_weights, updated_biases))
 
         except Exception as e:
             print(f"Adaptation worker error: {e}")

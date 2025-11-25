@@ -263,7 +263,7 @@ def task_inference_worker(input_q, output_q, trt_task_estimator_path,
     print("Task Worker: Exited.")
 
 # Function to save all collected dataif 
-def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None):
+def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None, incline_values=None, speed_values=None):
 
     # Convert lists to NumPy arrays
     data_np = {k: np.array(v) for k, v in data_to_save.items()}
@@ -301,8 +301,19 @@ def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None)
     torque_cols = ['timestamp', 'gait_phase_L', 'gait_phase_R', 
                    'mtr_cmd_L', 'mtr_cmd_R',
                    'incline_L', 'speed_L', 'incline_R', 'speed_R', 
-                   'avg_loss_L', 'avg_loss_R', 'gpio_output']
+                   'gpio_output']
     save_dataframe(f'{trial_name}-output_torque.csv', sliced_data, torque_cols)
+
+    # Save RMSE data
+    rmse_data = {'timestamp': sliced_data['timestamp']}
+    for incline in incline_values:
+        for speed in speed_values:
+            rmse_data[f'{incline}_{speed}_L'] = np.array([d[incline][speed] if d and incline in d and speed in d[incline] and d[incline][speed] is not None else np.nan for d in sliced_data['rmse_bins_L']])
+            rmse_data[f'{incline}_{speed}_R'] = np.array([d[incline][speed] if d and incline in d and speed in d[incline] and d[incline][speed] is not None else np.nan for d in sliced_data['rmse_bins_R']])
+
+    df_rmse = pd.DataFrame(rmse_data)
+    df_rmse.to_csv(f'{trial_name}-rmse.csv', index=False)
+    print(f'Data saved to {trial_name}-rmse.csv. Dimensions: {df_rmse.shape}')
 
 # Helper function to create and save DataFrame
 def save_dataframe(filename, data_dict, columns):

@@ -20,7 +20,7 @@ if __name__ == '__main__':
     adjustment_duration = 10  # seconds
     exo_ON = False
     adaptation_ON = True
-    replay_buffer_ON = False
+    replay_buffer_ON = True
 
     # Trigger setting
     trigger_type = "typing"  # "mocap" or "typing"
