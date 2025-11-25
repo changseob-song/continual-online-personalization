@@ -14,7 +14,7 @@ class Exo:
         self.frame_length_task = 200  # Window size for task estimator (in frames)
 
         # biotorque parameters
-        self.scale_factor = 0.20
+        self.scale_factor = 0.40
         self.delay_factor = 0  # Number of frames to delay the torque command
         self.max_torque = 10.0  # Maximum allowable torque (Nm)
 
@@ -27,9 +27,9 @@ class Exo:
         self.imus = ICM20948_I2C_IMUs()  # Back, Left hip, Right hip
 
         # FSR initialization
-        # self.fsr_adc = ADS1115_I2C()
-        self.fsr_threshold_L =32000  # Threshold value to detect foot contact
-        self.fsr_threshold_R = 32000  # Threshold value to detect foot contact
+        self.fsr_adc = ADS1115_I2C()
+        self.fsr_threshold_L =10000  # Threshold value to detect foot contact
+        self.fsr_threshold_R = 10000  # Threshold value to detect foot contact
 
         # Specify the CAN interface and channel
         try:

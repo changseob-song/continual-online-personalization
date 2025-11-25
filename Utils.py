@@ -126,6 +126,18 @@ def cartesian_to_percentage(cartesian_coords):
     percentage = (angle + 2*np.pi) % (2 * np.pi) / (2 * np.pi) * 100  # Normalize to (0, 100]
     return percentage
 
+def cartesian_to_percentage_tensor(cartesian_coords):
+    # Ensure input is a torch tensor
+    if isinstance(cartesian_coords, np.ndarray):
+        cartesian_coords = torch.from_numpy(cartesian_coords).to('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Use the second dimension for y and the first for x
+    angle = torch.atan2(cartesian_coords[:, 1], cartesian_coords[:, 0])
+    
+    # Normalize to [0, 100]
+    percentage = (angle + 2 * np.pi) % (2 * np.pi) / (2 * np.pi) * 100
+    return percentage
+
 # Fast roll function to shift array elements
 def fast_roll(arr):
     # For unilateral model

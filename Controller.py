@@ -133,15 +133,16 @@ class Controller:
         model_output_r_val = last_model_output_r; model_output_l_val = last_model_output_l
         model_output_r_task = last_model_output_r_task; model_output_l_task = last_model_output_l_task
 
-        incline_values = [-10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10]
+        incline_values = [-10, -5, 0, 5, 10]
         incline_thresholds = [(incline_values[i] + incline_values[i+1]) / 2 for i in range(len(incline_values)-1)]
 
         speed_values = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4]
         speed_thresholds = [(speed_values[i] + speed_values[i+1]) / 2 for i in range(len(speed_values)-1)]
 
-        update_time_R, update_time_L = 0.0, 0.0
+        update_latency_R, update_latency_L = 0.0, 0.0
         avg_loss_R, avg_loss_L = 0.0, 0.0
         gp_loop_index, task_loop_index = 0, 0
+        start_idx_L, start_idx_R = -1, -1
 
         # Initialize data structures to save data
         max_samples = int((self.trial_dur_sec + self.pulse_after_start) * 100)
@@ -215,9 +216,9 @@ class Controller:
 
             # 2.1 Read the FSR values
             if loop_index % 2 == 0:
-                fsr_L = 0 #self.Exo.fsr_adc.read_FSR(0)
+                fsr_L = self.Exo.fsr_adc.read_FSR(0)
             else:
-                fsr_R = 0 #self.Exo.fsr_adc.read_FSR(1)
+                fsr_R = self.Exo.fsr_adc.read_FSR(1)
             log_fsr_L[loop_index] = fsr_L; log_fsr_R[loop_index] = fsr_R
 
             # 3. Mirror the left data to the right side (Unilateral model input)
@@ -244,9 +245,10 @@ class Controller:
 
                 # --- REVISED ADAPTATION TRIGGER LOGIC ---
                 update_freq_gc = 2 # Number of gait cycles for each adaptation update
-                
+                num_skipped_cycles = 1 # Number of initial cycles to skip after starting adaptation
+
                 # Optimized peak detection on recent data
-                search_window = 500 # Search in the last 5 seconds
+                search_window = 700 # Search in the last 6 seconds
                 search_start_idx = max(0, loop_index - search_window)
                 recent_fsr_L = self.data_to_save['fsr_L'][search_start_idx:loop_index]
                 recent_fsr_R = self.data_to_save['fsr_R'][search_start_idx:loop_index]
@@ -260,35 +262,34 @@ class Controller:
 
                 # Check if there are enough new heel strikes for an update (2 gait cycles = 2 new heel strikes after the start)
                 if self.last_used_peak_idx_L not in heelstrike_indices_L:
-                    if len(heelstrike_indices_L) > update_freq_gc:
+                    if len(heelstrike_indices_L) > update_freq_gc + num_skipped_cycles:
                         # Get the absolute start and end indices for the data slice
-                        start_idx_abs = heelstrike_indices_L[0]; end_idx_abs = heelstrike_indices_L[-1]
-                        print('\nL', start_idx_abs, heelstrike_indices_L[1:-1], end_idx_abs)
-                        mid_peak_idx_rel = heelstrike_indices_L[1:-1] - start_idx_abs # This is relative about start_idx_abs
+                        start_idx_abs = heelstrike_indices_L[-3]; end_idx_abs = heelstrike_indices_L[-1]
+                        print('\nL', start_idx_abs, heelstrike_indices_L[-2:-1], end_idx_abs)
+                        mid_peak_idx_rel = heelstrike_indices_L[-2:-1] - start_idx_abs # This is relative about start_idx_abs
 
                         # Slice the data from the input stream buffer
                         start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
                         input_stream_data_L = input_stream_data[0, :, start_idx_rel:end_idx_rel]
 
-                        self.online_adaptator.trigger_finetuning('L', current_incline_L, current_speed_L, input_stream_data_L.T.copy(), mid_peak_idx_rel)
+                        self.online_adaptator.trigger_finetuning('L', current_incline_L, current_speed_L, input_stream_data_L.T.copy(), mid_peak_idx_rel, loop_index)
 
                         # Update the last used peak to the end of the current window
                         self.last_used_peak_idx_L = end_idx_abs
-                        print(self.last_used_peak_idx_L)
 
                 # Check if there are enough new heel strikes for an update (2 gait cycles = 2 new heel strikes after the start)
                 if self.last_used_peak_idx_R not in heelstrike_indices_R:
-                    if len(heelstrike_indices_R) > update_freq_gc:
+                    if len(heelstrike_indices_R) > update_freq_gc + num_skipped_cycles:
                         # Get the absolute start and end indices for the data slice
-                        start_idx_abs = heelstrike_indices_R[0]; end_idx_abs = heelstrike_indices_R[-1]
-                        print('\nR', start_idx_abs, heelstrike_indices_R[1:-1], end_idx_abs)
-                        mid_peak_idx_rel = heelstrike_indices_R[1:-1] - start_idx_abs # This is relative about start_idx_abs
+                        start_idx_abs = heelstrike_indices_R[-3]; end_idx_abs = heelstrike_indices_R[-1]
+                        print('\nR', start_idx_abs, heelstrike_indices_R[-2:-1], end_idx_abs)
+                        mid_peak_idx_rel = heelstrike_indices_R[-2:-1] - start_idx_abs # This is relative about start_idx_abs
 
                         # Slice the data from the input stream buffer
                         start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
                         input_stream_data_R = input_stream_data[1, :, start_idx_rel:end_idx_rel]
 
-                        self.online_adaptator.trigger_finetuning('R', current_incline_R, current_speed_R, input_stream_data_R.T.copy(), mid_peak_idx_rel)
+                        self.online_adaptator.trigger_finetuning('R', current_incline_R, current_speed_R, input_stream_data_R.T.copy(), mid_peak_idx_rel, loop_index)
 
                         # Update the last used peak to the end of the current window
                         self.last_used_peak_idx_R = end_idx_abs
@@ -296,13 +297,15 @@ class Controller:
             # Check for new weights from the adaptation worker
             updated_params = self.online_adaptator.get_updated_weights()
             if updated_params:
-                side, avg_loss, update_time, weights, biases = updated_params
+                side, avg_loss, start_index, weights, biases = updated_params
                 if side == 'R':
                     self.linear_weights_R = weights;    self.linear_biases_R = biases
-                    avg_loss_R = avg_loss;  update_time_R = update_time
+                    start_idx_L = start_index
+                    avg_loss_R = avg_loss;  update_latency_R = (loop_index - start_index) / self.Exo.control_freq_Hz
                 elif side == 'L':
                     self.linear_weights_L = weights;    self.linear_biases_L = biases
-                    avg_loss_L = avg_loss;  update_time_L = update_time
+                    start_idx_R = start_index
+                    avg_loss_L = avg_loss;  update_latency_L = (loop_index - start_index) / self.Exo.control_freq_Hz
 
             # 5. TensorRT inference & Apply linear layer weights and biases
             if self.gait_phase_output_q.empty():
@@ -460,8 +463,10 @@ class Controller:
                 "speed_R_pred": speed_pred_R,
                 "cmd_L": motor_cmd_val_L,
                 "cmd_R": motor_cmd_val_R,
-                "update_time_L": update_time_L,
-                "update_time_R": update_time_R,
+                "update_latency_L": update_latency_L,
+                "update_latency_R": update_latency_R,
+                "start_idx_L": start_idx_L,
+                "start_idx_R": start_idx_R,
                 "avg_loss_L": avg_loss_L,
                 "avg_loss_R": avg_loss_R,
                 "loop_time_exceeded": loop_time_exceeded,

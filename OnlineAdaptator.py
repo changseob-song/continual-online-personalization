@@ -6,7 +6,7 @@ import numpy as np
 import multiprocessing as mp
 from torch.utils.data import Dataset, Subset, DataLoader
 from scipy.signal import find_peaks
-from Utils import get_congruency_rmse_1d, get_congruency_rmse_2d, NumpyCompatUnpickler
+from Utils import cartesian_to_percentage_tensor
 
 def adaptation_worker_warmup(model, optimizer, criterion, device, model_path, input_mean, input_std, label_mean, label_std):
     # --- Warm-up Phase ---
@@ -105,27 +105,26 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
 
     adaptation_worker_warmup(model_R, optimizer_R, criterion, device, model_path, input_mean, input_std, label_mean, label_std)
 
-    incline_values = [-10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10]
+    incline_values = [-10, -5, 0, 5, 10]
     speed_values = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4]
     bin_state = {inc: {spd: {side: 0 for side in ['L', 'R']} for spd in speed_values} for inc in incline_values}
-    input_stream = {inc: {spd: None for spd in speed_values} for inc in incline_values}
+    input_stream = {inc: {spd: {side: None for side in ['L', 'R']} for spd in speed_values} for inc in incline_values}
     train_loader = {inc: {spd: {side: None for side in ['L', 'R']} for spd in speed_values} for inc in incline_values}
     avg_loss = 0
     misdetection_flag = False
-    misdetection_threshold = 200
+    min_replay_num = 4
 
     # Main loop to wait for data and fine-tune
     while True:
         try:
             # Wait for data from the main controller
-            side, incline, speed, input_data, mid_peak_idx = input_q.get() # input data shape : (length, channel num)
-            print(f'current incline: {incline}, speed: {speed}')
+            side, incline, speed, input_data, mid_peak_idx, start_idx = input_q.get() # input data shape : (length, channel num)
 
-            start_time = time.time()
-
+            misdetection_threshold = (1.5 + 0.45 * speed) * 100  # Convert to frames
             # Detect the heelstrike misdetection
             if (mid_peak_idx[0] > misdetection_threshold) or (input_data.shape[0] - mid_peak_idx[-1] > misdetection_threshold) or (np.diff(mid_peak_idx) > misdetection_threshold).any():
                 misdetection_flag = True
+                print(f"Adaptation Worker: Heelstrike misdetection detected {mid_peak_idx}, {input_data.shape[0]}.")
             else:
                 misdetection_flag = False
 
@@ -134,52 +133,101 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
             optimizer = optimizer_R if side == 'R' else optimizer_L
 
             # Interpolate with previous data if available
-            if bin_state[incline][speed] == 1 and (not misdetection_flag):
-                input_data = interpolate_two_cycles(input_data.T, input_stream[incline][speed].T, weight=0.5)
-                input_data = input_data.T  # Transpose back to (length, channel num)
+            if bin_state[incline][speed][side] == 1 and (not misdetection_flag):
+                interpolated_input_data = interpolate_two_cycles(input_data.T, input_stream[incline][speed][side].T, weight=0.5)
+                input_data = interpolated_input_data.T  # Transpose back to (length, channel num)
 
-            if adaptation_ON:
+            if adaptation_ON and not misdetection_flag:
                 
                 # Prepare data loader for the current task
-                if not misdetection_flag:
-                    dataset = LoadData(side, incline, speed, input_data, mid_peak_idx, model_path, input_mean, input_std, label_mean, label_std)
-                    if not dataset.initilized: continue # Skip if dataset returns nothing
+                dataset = LoadData(side, incline, speed, input_data, mid_peak_idx, model_path, input_mean, input_std, label_mean, label_std)
+                if not dataset.initilized: continue # Skip if dataset returns nothing
 
-                    train_indices = list(range(len(dataset)))
-                    subset = Subset(dataset, train_indices)
+                train_indices = list(range(len(dataset)))
+                subset = Subset(dataset, train_indices)
 
-                    bin_state[incline][speed][side] = 1
-                    input_stream[incline][speed] = input_data
-                    train_loader[incline][speed][side] = DataLoader(subset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True) # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
+                for incline in incline_values:
+                    for speed in speed_values:
+                        bin_state[incline][speed][side] = 1
+                        input_stream[incline][speed][side] = input_data
+                        train_loader[incline][speed][side] = DataLoader(subset, batch_size=16, shuffle=True, num_workers=0, pin_memory=True) # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
 
                 train_loader_combined_list = []
-                sampled_bins = []
 
                 if replay_buffer_ON:
                     # Get the positive bins excluding the current task
                     positive_bins = [(inc, spd) for inc in incline_values for spd in speed_values if (bin_state[inc][spd][side] > 0) and not (inc == incline and spd == speed)]
-                    
-                    # Only sample if there are positive bins to sample from
-                    if positive_bins:
-                        num_samples = min(1, len(positive_bins)) # Sample just one & Ensure we don't sample more than available
-                        sampled_bins = random.sample(positive_bins, num_samples)
-                        print(f"Adaptation Worker: Sampling from bins: {sampled_bins}")
 
+                    fp_time = time.time()
                     # Aggregate all train loaders into a single list
-                    for inc, spd in sampled_bins:
-                        # This check is redundant now but safe to keep
-                        if (inc == incline) and (spd == speed): continue
-                        # print(f"Adaptation Worker: Including data from {side}-{inc}-{spd} for training. {len(train_loader[inc][spd][side].dataset)} samples.")
-                        train_loader_combined_list.append(train_loader[inc][spd][side])
+                    rmse_bins = {inc: {spd: None for spd in speed_values} for inc in incline_values}
+
+                    with torch.no_grad(): # Disable gradient calculation for inference
+
+                        # inference on all positive bins to compute RMSE
+                        for inc, spd in positive_bins:
+                            # This check is redundant now but safe to keep
+                            if (inc == incline) and (spd == speed): continue
+
+                            # Get the original subset from the loader
+                            original_subset = train_loader[inc][spd][side].dataset
+                            
+                            # Sample every 10th index from the original subset's indices
+                            sampled_indices = original_subset.indices[::10]
+                            sampled_subset = Subset(original_subset.dataset, sampled_indices)
+                            
+                            # Create a loader for the sampled dataset
+                            full_loader = DataLoader(sampled_subset, batch_size=32, shuffle=False, num_workers=0, pin_memory=True)
+
+                            labels_gp, outputs_gp = [], []
+                            for inputs, labels in full_loader:
+                                outputs = model(inputs.to(device))
+                                labels_gp.append(labels)
+                                outputs_gp.append(outputs.cpu())
+
+                            # Concatenate all batches
+                            all_labels = torch.cat(labels_gp, dim=0)
+                            all_outputs = torch.cat(outputs_gp, dim=0)
+                            labels_percent = cartesian_to_percentage_tensor(all_labels)
+                            outputs_percent = cartesian_to_percentage_tensor(all_outputs)
+
+                            # Vectorized error calculation
+                            error = outputs_percent - labels_percent
+                            error[error < -50] += 100
+                            error[error > 50] -= 100
+
+                            # Calculate RMSE
+                            rmse_bins[inc][spd] = torch.sqrt(torch.mean(error**2)).item()
+                            # print(f"Adaptation Worker: {inc}-{spd}-{side}: {rmse_bins[inc][spd]:.2f} (RMSE)")
+                        
+                    print(f"Adaptation Worker: RMSE computation time: {(time.time() - fp_time):.2f} seconds")
+                    # Select top-k highest RMSE bins
+                    k = min(min_replay_num, len(positive_bins))  # Choose up to 4
+                    top_k_bins = sorted(positive_bins, key=lambda x: rmse_bins[x[0]][x[1]], reverse=True)[:k]
+                    
+                    # Add bins to replay buffer only if their RMSE is above a threshold
+                    replay_threshold = 3.0 # Corresponds to 3% RMSE
+                    bins_for_replay = []
+                    for inc, spd in top_k_bins:
+                        if rmse_bins[inc][spd] > replay_threshold:
+                            train_loader_combined_list.append(train_loader[inc][spd][side])
+                            bins_for_replay.append((inc, spd))
+                        elif rmse_bins[inc][spd] <= replay_threshold:
+                            train_loader_combined_list.append(train_loader[incline][speed][side])
+                    
+                    if bins_for_replay:
+                        print(f"Adaptation Worker: Replaying bins with RMSE > {replay_threshold}%: {bins_for_replay}")
 
                     if train_loader_combined_list:
                         train_loader_combined = torch.utils.data.ConcatDataset([loader.dataset for loader in train_loader_combined_list])
                         train_loader_combined = DataLoader(train_loader_combined, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
                     else:
                         train_loader_combined = train_loader[incline][speed][side] # Fallback to current task only
-                
-                elif not replay_buffer_ON: # No replay buffer, only use current task (double epochs)
-                    train_loader_combined = train_loader[incline][speed][side]
+
+                elif not replay_buffer_ON:
+                    current_dataset = train_loader[incline][speed][side].dataset
+                    combined_dataset = torch.utils.data.ConcatDataset([current_dataset] * min_replay_num)
+                    train_loader_combined = DataLoader(combined_dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
 
                 # Training loop - other tasks that is already in the buffer
                 for input_batch, label_batch in train_loader_combined:
@@ -211,15 +259,13 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
                         num_batches += 1
                         
                 avg_loss = tloss / num_batches if num_batches > 0 else 0
-            print("avg loss: ", avg_loss)
+            print(f"avg loss: {avg_loss:.3f}")
 
             # After training, get the updated weights and send them back
             updated_weights = model.linear.weight.data.clone().cpu().numpy()
             updated_biases = model.linear.bias.data.clone().cpu().numpy()
 
-            update_time = time.time() - start_time
-
-            output_q.put((side, avg_loss, update_time, updated_weights, updated_biases))
+            output_q.put((side, avg_loss, start_idx, updated_weights, updated_biases))
 
         except Exception as e:
             print(f"Adaptation worker error: {e}")
@@ -244,9 +290,9 @@ class OnlineAdaptator():
         )
         self.adaptation_process.start()
 
-    def trigger_finetuning(self, side, incline, speed, input_data, mid_peak_idx):
+    def trigger_finetuning(self, side, incline, speed, input_data, mid_peak_idx, start_idx):
         """Sends data to the adaptation worker to start fine-tuning."""
-        self.input_q.put((side, incline, speed, input_data, mid_peak_idx))
+        self.input_q.put((side, incline, speed, input_data, mid_peak_idx, start_idx))
 
     def get_updated_weights(self):
         """Checks for and returns updated weights from the worker."""
@@ -270,17 +316,7 @@ class LoadData(Dataset):
         peak_indices = mid_peak_idx.tolist()
         peak_indices.insert(0, 0)  # Add start index
         peak_indices.append(self.input.shape[0])  # Add end index
-        print(side, incline, speed, f"Peak indices: {peak_indices}")
-
-        if (len(peak_indices) - 1) < 2:
-            print(f"Not enough gait cycles detected. {len(peak_indices) - 1} Need at least 2.")
-            return
-        # else:
-            # print(f"\nDetected {len(peak_indices)-1} gait cycles.")
-            # if side == 'R':
-            #     print(f"R Peak indices: {peak_indices}")
-            # else:
-            #     print(f"L Peak indices: {peak_indices}")
+        print(f"{side}, inc: {incline}, spd: {speed}, HS idx: {peak_indices}")
 
         def gait_cycle_generator(peak_indices, num_cycles=None):
             # Create an array of all time indices

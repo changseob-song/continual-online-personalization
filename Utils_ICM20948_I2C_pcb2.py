@@ -10,7 +10,7 @@ class ICM20948_I2C_IMUs:
         # to sweep all mux ports to see what's attached
         # self.IMU_mux_ports = dict([(f"{i}",i) for i in range(0,4)])
         self.IMU_mux_ports = {    # Multiplexer port numbers with an IMU actually attached
-            'IMU_PELVIS' : 2, # correct pairing as of 20250114
+            # 'IMU_PELVIS' : 2, # correct pairing as of 20250114
             'IMU_THIGH_RIGHT' : 4, # correct pairing as of 20250114
             'IMU_THIGH_LEFT' : 1,
             'IMU_BACK' : 8 # correct pairing as of 20250114

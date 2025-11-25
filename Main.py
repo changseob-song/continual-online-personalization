@@ -10,15 +10,16 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting'
-    subject = 'test'
+    subject = '_'
+    inclination = '_'
 
-    trial_name = f'{subject}-task_estimator'
+    trial_name = f'test-{subject}-{inclination}'
 
     pulse_after_start = 2  # seconds
-    trial_dur_sec = 15*11+5  # seconds
+    trial_dur_sec = 15*10 + 5  # seconds
     adjustment_duration = 10  # seconds
-    exo_ON = True
-    adaptation_ON = False
+    exo_ON = False
+    adaptation_ON = True
     replay_buffer_ON = False
 
     # Trigger setting
@@ -29,11 +30,11 @@ if __name__ == '__main__':
 
     # Model path
     # tcn_only
-    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-RD_GRF_flipped/heel_strike-RD_GRF_flipped_tcn.trt'
+    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-RD_flipped-transferred/heel_strike-RD_flipped-transferred.trt'
     # entire model (TCN + linear layer)
-    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-RD_GRF_flipped/heel_strike-RD_GRF_flipped.pt'
+    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-RD_flipped-transferred/heel_strike-RD_flipped-transferred.pt'
     # task estimator path
-    trt_task_estimator_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/task_estimator-transferred/task_estimator-transferred.trt'
+    trt_task_estimator_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/task_estimator-transferred-epoch_30/task_estimator-transferred.trt'
     # torque profile path
     torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE/torque_splines.pkl'
     
