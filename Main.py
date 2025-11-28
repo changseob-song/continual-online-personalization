@@ -10,23 +10,23 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting'
-    subject = '_'
-    inclination = '_'
+    subject = 'AB23_Min'
+    inclination = 'LG'
 
-    trial_name = f'test-{subject}-{inclination}'
+    trial_name = f'task_estimator_12tasks-{subject}-{inclination}'
 
     pulse_after_start = 2  # seconds
-    trial_dur_sec = 15*10 + 5  # seconds
+    trial_dur_sec = 20*4 + 5  # seconds
     adjustment_duration = 10  # seconds
-    exo_ON = False
-    adaptation_ON = True
-    replay_buffer_ON = True
+    exo_ON = True
+    adaptation_ON = False
+    replay_buffer_ON = False
 
     # Trigger setting
-    trigger_type = "typing"  # "mocap" or "typing"
+    trigger_type = "mocap"  # "mocap" or "typing"
 
     # Body mass setting
-    body_mass_kg = 72  # kg
+    body_mass_kg = 50  # kg
 
     # Model path
     # tcn_only
@@ -34,7 +34,7 @@ if __name__ == '__main__':
     # entire model (TCN + linear layer)
     pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-RD_flipped-transferred/heel_strike-RD_flipped-transferred.pt'
     # task estimator path
-    trt_task_estimator_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/task_estimator-transferred-epoch_30/task_estimator-transferred.trt'
+    trt_task_estimator_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/task_estimator-classifier_12tasks-transferred/task_estimator-classifier_12tasks-transferred.trt'
     # torque profile path
     torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE/torque_splines.pkl'
     

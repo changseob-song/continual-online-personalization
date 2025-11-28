@@ -45,13 +45,10 @@ class Controller:
         task_estimator_path = os.path.dirname(self.trt_task_estimator_path)
         input_mean_task_estimator_path = os.path.join(task_estimator_path, 'input_mean.npy')
         input_std_task_estimator_path = os.path.join(task_estimator_path, 'input_std.npy')
-        label_mean_task_estimator_path = os.path.join(task_estimator_path, 'label_mean.npy')
-        label_std_task_estimator_path = os.path.join(task_estimator_path, 'label_std.npy')
 
         self.input_mean = np.load(input_mean_path); self.input_std = np.load(input_std_path)
         self.label_mean = np.load(label_mean_path); self.label_std = np.load(label_std_path)
         self.input_mean_task = np.load(input_mean_task_estimator_path);   self.input_std_task = np.load(input_std_task_estimator_path)
-        self.label_mean_task = np.load(label_mean_task_estimator_path);   self.label_std_task = np.load(label_std_task_estimator_path)
     
         self.num_input_features = self.input_mean.shape[0]
         self.num_input_features_task = self.input_mean_task.shape[0]
@@ -94,10 +91,13 @@ class Controller:
         # Initialize OnlineAdaptator
         self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.adaptation_ON, self.replay_buffer_ON)
 
-        self.incline_values = [-10, -5, 0, 5, 10]
+        self.incline_values = [-5, 0, 5]
         self.incline_thresholds = [(self.incline_values[i] + self.incline_values[i+1]) / 2 for i in range(len(self.incline_values)-1)]
-        self.speed_values = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4]
+        self.speed_values = [0.4, 0.7, 1.0, 1.3]
         self.speed_thresholds = [(self.speed_values[i] + self.speed_values[i+1]) / 2 for i in range(len(self.speed_values)-1)]
+        # self.incline_keys = {0: -5, 1: 0, 2: 5}
+        self.incline_keys = {0: -5, 1: 0, 2: 5}
+        self.speed_keys = {0: 0.4, 1: 0.7, 2: 1.0, 3: 1.3}
 
     def detect_heel_strike(self, fsr_data, threshold, min_interval):
         # Create binary FSR signal based on threshold
@@ -260,7 +260,7 @@ class Controller:
                 buffer_start_abs = loop_index - len(input_stream_data[0, 0, :])
 
                 # Check if there are enough new heel strikes for an update (2 gait cycles = 2 new heel strikes after the start)
-                if self.last_used_peak_idx_L not in heelstrike_indices_L:
+                if (self.last_used_peak_idx_L not in heelstrike_indices_L) and self.adaptation_ON:
                     if len(heelstrike_indices_L) > update_freq_gc + num_skipped_cycles:
                         # Get the absolute start and end indices for the data slice
                         start_idx_abs = heelstrike_indices_L[-3]; end_idx_abs = heelstrike_indices_L[-1]
@@ -277,7 +277,7 @@ class Controller:
                         self.last_used_peak_idx_L = end_idx_abs
 
                 # Check if there are enough new heel strikes for an update (2 gait cycles = 2 new heel strikes after the start)
-                if self.last_used_peak_idx_R not in heelstrike_indices_R:
+                if (self.last_used_peak_idx_R not in heelstrike_indices_R) and self.adaptation_ON:
                     if len(heelstrike_indices_R) > update_freq_gc + num_skipped_cycles:
                         # Get the absolute start and end indices for the data slice
                         start_idx_abs = heelstrike_indices_R[-3]; end_idx_abs = heelstrike_indices_R[-1]
@@ -356,12 +356,10 @@ class Controller:
             gradual_torque_scale_L = np.max((1 - avg_loss_L/0.5), 0)
             gradual_torque_scale_R = np.max((1 - avg_loss_R/0.5), 0)
 
-            # 6.1 Get the task estimation outputs
-            model_output_l_task_denorm = model_output_l_task * self.label_std_task + self.label_mean_task
-            model_output_r_task_denorm = model_output_r_task * self.label_std_task + self.label_mean_task
 
-            incline_pred_R = model_output_r_task_denorm[0]; incline_pred_L = model_output_l_task_denorm[0]
-            speed_pred_R = model_output_r_task_denorm[1]; speed_pred_L = model_output_l_task_denorm[1]
+            # 6.1 Get the task estimation outputs
+            incline_pred_R = self.incline_keys[np.argmax(model_output_l_task[0])]; incline_pred_L = self.incline_keys[np.argmax(model_output_l_task[0])]
+            speed_pred_R = self.speed_keys[np.argmax(model_output_r_task[1])]; speed_pred_L = self.speed_keys[np.argmax(model_output_r_task[1])]
 
             incline_pred_history = fast_roll(incline_pred_history); speed_pred_history = fast_roll(speed_pred_history)
             incline_pred_history[0, -1] = incline_pred_R; incline_pred_history[1, -1] = incline_pred_L

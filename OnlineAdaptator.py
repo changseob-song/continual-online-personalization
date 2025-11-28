@@ -105,14 +105,17 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
 
     adaptation_worker_warmup(model_R, optimizer_R, criterion, device, model_path, input_mean, input_std, label_mean, label_std)
 
-    incline_values = [-10, -5, 0, 5, 10]
-    speed_values = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4]
+    incline_values = [-5, 0, 5]
+    speed_values = [0.4, 0.7, 1.0, 1.3]
     bin_state = {inc: {spd: {side: 0 for side in ['L', 'R']} for spd in speed_values} for inc in incline_values}
     input_stream = {inc: {spd: {side: None for side in ['L', 'R']} for spd in speed_values} for inc in incline_values}
     train_loader = {inc: {spd: {side: None for side in ['L', 'R']} for spd in speed_values} for inc in incline_values}
     avg_loss = 0
     misdetection_flag = False
-    min_replay_num = 4
+    
+    min_replay_num = 4 # Minimum number of bins to consider for replay
+    loss_threshold = 1.0 # Loss threshold to accept a training step
+    replay_threshold = 3.0 # RMSE threshold (%) to include a bin in the replay buffer
 
     # Main loop to wait for data and fine-tune
     while True:
@@ -136,96 +139,84 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
             if bin_state[incline][speed][side] == 1 and (not misdetection_flag):
                 interpolated_input_data = interpolate_two_cycles(input_data.T, input_stream[incline][speed][side].T, weight=0.5)
                 input_data = interpolated_input_data.T  # Transpose back to (length, channel num)
-
-            if adaptation_ON and not misdetection_flag:
+            elif bin_state[incline][speed][side] == 1 and misdetection_flag:
+                input_data = prev_input_data  # Use previous data
+            elif bin_state[incline][speed][side] == 0 and misdetection_flag:
+                continue # Skip this iteration if no valid data is available
+            
                 
-                # Prepare data loader for the current task
-                dataset = LoadData(side, incline, speed, input_data, mid_peak_idx, model_path, input_mean, input_std, label_mean, label_std)
-                if not dataset.initilized: continue # Skip if dataset returns nothing
+            # Prepare data loader for the current task
+            dataset = LoadData(side, incline, speed, input_data, mid_peak_idx, model_path, input_mean, input_std, label_mean, label_std)
+            if not dataset.initilized: continue # Skip if dataset returns nothing
 
-                train_indices = list(range(len(dataset)))
-                subset = Subset(dataset, train_indices)
+            train_indices = list(range(len(dataset)))
+            subset = Subset(dataset, train_indices)
 
-                bin_state[incline][speed][side] = 1
-                input_stream[incline][speed][side] = input_data
-                train_loader[incline][speed][side] = DataLoader(subset, batch_size=16, shuffle=True, num_workers=0, pin_memory=True) # !!!! Using num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
+            bin_state[incline][speed][side] = 1
+            train_loader_current_task = DataLoader(subset, batch_size=16, shuffle=True, num_workers=0, pin_memory=True) # Use num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
 
+            if replay_buffer_ON:
+                # Get the positive bins excluding the current task
+                positive_bins = [(inc, spd) for inc in incline_values for spd in speed_values if (bin_state[inc][spd][side] > 0) and not (inc == incline and spd == speed)]
+                # Aggregate all train loaders into a single list
+                rmse_bins = {inc: {spd: None for spd in speed_values} for inc in incline_values}
+
+                with torch.no_grad(): # Disable gradient calculation for inference
+
+                    # inference on all positive bins to compute RMSE
+                    for inc, spd in positive_bins:
+                        # Skip the current task
+                        if (inc == incline) and (spd == speed): continue
+
+                        # Get the original subset from the loader
+                        original_subset = train_loader[inc][spd][side].dataset
+                        
+                        # Sample every 10th index from the original subset's indices
+                        sampled_indices = original_subset.indices[::10]
+                        sampled_subset = Subset(original_subset.dataset, sampled_indices)
+                        
+                        # Create a loader for the sampled dataset
+                        full_loader = DataLoader(sampled_subset, batch_size=32, shuffle=False, num_workers=0, pin_memory=True)
+
+                        labels_gp, outputs_gp = [], []
+                        for inputs, labels in full_loader:
+                            outputs = model(inputs.to(device))
+                            labels_gp.append(labels)
+                            outputs_gp.append(outputs.cpu())
+
+                        # Concatenate all batches
+                        all_labels = torch.cat(labels_gp, dim=0)
+                        all_outputs = torch.cat(outputs_gp, dim=0)
+                        labels_percent = cartesian_to_percentage_tensor(all_labels)
+                        outputs_percent = cartesian_to_percentage_tensor(all_outputs)
+
+                        # Vectorized error calculation
+                        error = outputs_percent - labels_percent
+                        error[error < -50] += 100
+                        error[error > 50] -= 100
+
+                        # Calculate RMSE
+                        rmse_bins[inc][spd] = torch.sqrt(torch.mean(error**2)).item()
+                        # print(f"Adaptation Worker: {inc}-{spd}-{side}: {rmse_bins[inc][spd]:.2f} (RMSE)")
+                    
+                # Select top-k highest RMSE bins
+                k = min(min_replay_num, len(positive_bins))  # Choose up to 4
+                top_k_bins = sorted(positive_bins, key=lambda x: rmse_bins[x[0]][x[1]], reverse=True)[:k]
+                
+                # Add bins to replay buffer only if their RMSE is above a threshold
+                bins_for_replay = []
                 train_loader_combined_list = []
 
-                if replay_buffer_ON:
-                    # Get the positive bins excluding the current task
-                    positive_bins = [(inc, spd) for inc in incline_values for spd in speed_values if (bin_state[inc][spd][side] > 0) and not (inc == incline and spd == speed)]
-
-                    fp_time = time.time()
-                    # Aggregate all train loaders into a single list
-                    rmse_bins = {inc: {spd: None for spd in speed_values} for inc in incline_values}
-
-                    with torch.no_grad(): # Disable gradient calculation for inference
-
-                        # inference on all positive bins to compute RMSE
-                        for inc, spd in positive_bins:
-                            # This check is redundant now but safe to keep
-                            if (inc == incline) and (spd == speed): continue
-
-                            # Get the original subset from the loader
-                            original_subset = train_loader[inc][spd][side].dataset
-                            
-                            # Sample every 10th index from the original subset's indices
-                            sampled_indices = original_subset.indices[::10]
-                            sampled_subset = Subset(original_subset.dataset, sampled_indices)
-                            
-                            # Create a loader for the sampled dataset
-                            full_loader = DataLoader(sampled_subset, batch_size=32, shuffle=False, num_workers=0, pin_memory=True)
-
-                            labels_gp, outputs_gp = [], []
-                            for inputs, labels in full_loader:
-                                outputs = model(inputs.to(device))
-                                labels_gp.append(labels)
-                                outputs_gp.append(outputs.cpu())
-
-                            # Concatenate all batches
-                            all_labels = torch.cat(labels_gp, dim=0)
-                            all_outputs = torch.cat(outputs_gp, dim=0)
-                            labels_percent = cartesian_to_percentage_tensor(all_labels)
-                            outputs_percent = cartesian_to_percentage_tensor(all_outputs)
-
-                            # Vectorized error calculation
-                            error = outputs_percent - labels_percent
-                            error[error < -50] += 100
-                            error[error > 50] -= 100
-
-                            # Calculate RMSE
-                            rmse_bins[inc][spd] = torch.sqrt(torch.mean(error**2)).item()
-                            # print(f"Adaptation Worker: {inc}-{spd}-{side}: {rmse_bins[inc][spd]:.2f} (RMSE)")
-                        
-                    # print(f"Adaptation Worker: RMSE computation time: {(time.time() - fp_time):.2f} seconds")
-                    # Select top-k highest RMSE bins
-                    k = min(min_replay_num, len(positive_bins))  # Choose up to 4
-                    top_k_bins = sorted(positive_bins, key=lambda x: rmse_bins[x[0]][x[1]], reverse=True)[:k]
-                    
-                    # Add bins to replay buffer only if their RMSE is above a threshold
-                    replay_threshold = 3.0 # Corresponds to 3% RMSE
-                    bins_for_replay = []
-                    for inc, spd in top_k_bins:
-                        if rmse_bins[inc][spd] > replay_threshold:
-                            train_loader_combined_list.append(train_loader[inc][spd][side])
-                            bins_for_replay.append((inc, spd))
-                        elif rmse_bins[inc][spd] <= replay_threshold: # Below threshold, include current task instead
-                            train_loader_combined_list.append(train_loader[incline][speed][side])
-                    
-                    if bins_for_replay:
+                for inc, spd in top_k_bins:
+                    if rmse_bins[inc][spd] > replay_threshold:
+                        train_loader_combined_list.append(train_loader[inc][spd][side])
+                        bins_for_replay.append((inc, spd))
                         print(f"Adaptation Worker: Replaying bins with RMSE > {replay_threshold}%: {bins_for_replay}")
 
-                    if train_loader_combined_list:
-                        train_loader_combined = torch.utils.data.ConcatDataset([loader.dataset for loader in train_loader_combined_list])
-                        train_loader_combined = DataLoader(train_loader_combined, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
-                    else:
-                        train_loader_combined = train_loader[incline][speed][side] # Fallback to current task only
-
-                elif not replay_buffer_ON:
-                    current_dataset = train_loader[incline][speed][side].dataset
-                    combined_dataset = torch.utils.data.ConcatDataset([current_dataset] * min_replay_num)
-                    train_loader_combined = DataLoader(combined_dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
+                # Combine all top k replay bins
+                if train_loader_combined_list:
+                    train_loader_combined = torch.utils.data.ConcatDataset([loader.dataset for loader in train_loader_combined_list])
+                    train_loader_combined = DataLoader(train_loader_combined, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
 
                 # Training loop - other tasks that is already in the buffer
                 for input_batch, label_batch in train_loader_combined:
@@ -239,25 +230,31 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
                     loss.backward()
                     optimizer.step()
 
-                # Training loop - current task
-                tloss = 0
-                num_batches = 0
-                for input_batch, label_batch in train_loader[incline][speed][side]:
-                    input_batch = input_batch.to(device)
-                    label_batch = label_batch.to(device)
-                    
-                    optimizer.zero_grad()
-                    logits = model(input_batch)
-                    loss = criterion(logits, label_batch)
+            # Training loop - current task (put current task at the end to prioritize current task)
+            tloss = 0
+            num_batches = 0
+            for input_batch, label_batch in train_loader_current_task:
+                input_batch = input_batch.to(device)
+                label_batch = label_batch.to(device)
+                
+                optimizer.zero_grad()
+                logits = model(input_batch)
+                loss = criterion(logits, label_batch)
 
-                    if loss < 1.0:
-                        loss.backward()
-                        optimizer.step()
-                        tloss += loss.item()
-                        num_batches += 1
-                        
-                avg_loss = tloss / num_batches if num_batches > 0 else 0
+                if loss < loss_threshold:
+                    loss.backward()
+                    optimizer.step()
+                    tloss += loss.item()
+                    num_batches += 1
+                    
+            avg_loss = tloss / num_batches if num_batches > 0 else 0
+
             print(f"avg loss: {avg_loss:.3f}")
+            if avg_loss < loss_threshold:
+                input_stream[incline][speed][side] = input_data
+                train_loader[incline][speed][side] = train_loader_current_task
+            
+            prev_input_data = input_data # Store current data to prepare misdetection cases
 
             # After training, get the updated weights and send them back
             updated_weights = model.linear.weight.data.clone().cpu().numpy()

@@ -216,6 +216,22 @@ def gait_phase_inference_worker(input_q, output_q, trt_engine_path,
     del runtime
     print("Gait Phase Worker: Exited.")
 
+def trt_inference_task(input_data, output_shapes, context):
+    # Use torch.tensor(...) on CUDA for input
+    d_input = torch.tensor(input_data, dtype=torch.float32, device='cuda')
+
+    # Create output tensors on CUDA
+    d_outputs = [torch.empty(*shape, dtype=torch.float32, device='cuda') for shape in output_shapes]
+
+    # Prepare bindings
+    bindings = [int(d_input.data_ptr())] + [int(d_output.data_ptr()) for d_output in d_outputs]
+
+    context.execute_v2(bindings=bindings)
+
+    # Copy outputs to CPU
+    outputs = [d_output.cpu().numpy() for d_output in d_outputs]
+    return outputs
+
 def task_inference_worker(input_q, output_q, trt_task_estimator_path,
                           num_input_features, frame_length_task):
     if torch.cuda.is_available():
@@ -234,9 +250,10 @@ def task_inference_worker(input_q, output_q, trt_task_estimator_path,
     context_task = engine_task.create_execution_context()
 
     dummy_input_data_task = np.zeros((1, num_input_features, frame_length_task), dtype=np.float32)
-    dummy_output_shape_task = (2,)
+    output_shape_task = [(3,), (4,)]
+    
     for _ in range(10):
-        _ = trt_inference(dummy_input_data_task, dummy_output_shape_task, context_task)
+        _ = trt_inference_task(dummy_input_data_task, output_shape_task, context_task)
     print("Task Estimation TensorRT engine warmed up.")
 
     while True:
@@ -249,9 +266,8 @@ def task_inference_worker(input_q, output_q, trt_task_estimator_path,
             model_input_arr_task_l, model_input_arr_task_r, loop_index = data_in
 
             # Task estimation
-            output_shape_task = (2,)
-            model_output_task_l = trt_inference(model_input_arr_task_l, output_shape_task, context_task)
-            model_output_task_r = trt_inference(model_input_arr_task_r, output_shape_task, context_task)
+            model_output_task_l = trt_inference_task(model_input_arr_task_l, output_shape_task, context_task)
+            model_output_task_r = trt_inference_task(model_input_arr_task_r, output_shape_task, context_task)
 
             output_q.put((model_output_task_l, model_output_task_r, loop_index))
         except Exception as e:

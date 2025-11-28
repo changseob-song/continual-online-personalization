@@ -28,7 +28,7 @@ class Exo:
 
         # FSR initialization
         self.fsr_adc = ADS1115_I2C()
-        self.fsr_threshold_L =10000  # Threshold value to detect foot contact
+        self.fsr_threshold_L = 10000  # Threshold value to detect foot contact
         self.fsr_threshold_R = 10000  # Threshold value to detect foot contact
 
         # Specify the CAN interface and channel
