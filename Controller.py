@@ -95,7 +95,6 @@ class Controller:
         self.incline_thresholds = [(self.incline_values[i] + self.incline_values[i+1]) / 2 for i in range(len(self.incline_values)-1)]
         self.speed_values = [0.4, 0.7, 1.0, 1.3]
         self.speed_thresholds = [(self.speed_values[i] + self.speed_values[i+1]) / 2 for i in range(len(self.speed_values)-1)]
-        # self.incline_keys = {0: -5, 1: 0, 2: 5}
         self.incline_keys = {0: -5, 1: 0, 2: 5}
         self.speed_keys = {0: 0.4, 1: 0.7, 2: 1.0, 3: 1.3}
 
@@ -260,7 +259,7 @@ class Controller:
                 buffer_start_abs = loop_index - len(input_stream_data[0, 0, :])
 
                 # Check if there are enough new heel strikes for an update (2 gait cycles = 2 new heel strikes after the start)
-                if (self.last_used_peak_idx_L not in heelstrike_indices_L) and self.adaptation_ON:
+                if (self.last_used_peak_idx_L not in heelstrike_indices_L):
                     if len(heelstrike_indices_L) > update_freq_gc + num_skipped_cycles:
                         # Get the absolute start and end indices for the data slice
                         start_idx_abs = heelstrike_indices_L[-3]; end_idx_abs = heelstrike_indices_L[-1]
@@ -277,7 +276,7 @@ class Controller:
                         self.last_used_peak_idx_L = end_idx_abs
 
                 # Check if there are enough new heel strikes for an update (2 gait cycles = 2 new heel strikes after the start)
-                if (self.last_used_peak_idx_R not in heelstrike_indices_R) and self.adaptation_ON:
+                if (self.last_used_peak_idx_R not in heelstrike_indices_R):
                     if len(heelstrike_indices_R) > update_freq_gc + num_skipped_cycles:
                         # Get the absolute start and end indices for the data slice
                         start_idx_abs = heelstrike_indices_R[-3]; end_idx_abs = heelstrike_indices_R[-1]
@@ -353,8 +352,8 @@ class Controller:
             # else:
             #     gradual_torque_scale = 0.0
 
-            gradual_torque_scale_L = np.max((1 - avg_loss_L/0.5), 0)
-            gradual_torque_scale_R = np.max((1 - avg_loss_R/0.5), 0)
+            gradual_torque_scale_L = np.max((1 - avg_loss_L/1.0), 0)
+            gradual_torque_scale_R = np.max((1 - avg_loss_R/1.0), 0)
 
 
             # 6.1 Get the task estimation outputs
@@ -393,10 +392,6 @@ class Controller:
 
             log_incline_L[loop_index] = current_incline_L; log_speed_L[loop_index] = current_speed_L
             log_incline_R[loop_index] = current_incline_R; log_speed_R[loop_index] = current_speed_R
-
-            # 8. Filter the torque command
-            # motor_cmd_val_L = causal_filter(motor_cmd_array[1, :], tau=0.05)[-1]
-            # motor_cmd_val_R = causal_filter(motor_cmd_array[0, :], tau=0.05)[-1]
 
             if Exo_ON == False: motor_cmd_val_L, motor_cmd_val_R = 0.0, 0.0 # use this for Exo off condition
             if motor_cmd_val_L > self.Exo.max_torque:    motor_cmd_val_L = self.Exo.max_torque 

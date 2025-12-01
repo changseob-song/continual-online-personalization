@@ -14,9 +14,9 @@ class Exo:
         self.frame_length_task = 200  # Window size for task estimator (in frames)
 
         # biotorque parameters
-        self.scale_factor = 0.40
+        self.scale_factor = 0.20
         self.delay_factor = 0  # Number of frames to delay the torque command
-        self.max_torque = 10.0  # Maximum allowable torque (Nm)
+        self.max_torque = 12.5  # Maximum allowable torque (Nm)
 
         # note: motors zero themselves when actuation.Motors() runs
         _ = input("Press Enter to initialize motors: ")
@@ -28,8 +28,8 @@ class Exo:
 
         # FSR initialization
         self.fsr_adc = ADS1115_I2C()
-        self.fsr_threshold_L = 10000  # Threshold value to detect foot contact
-        self.fsr_threshold_R = 10000  # Threshold value to detect foot contact
+        self.fsr_threshold_L = 25000  # Threshold value to detect foot contact
+        self.fsr_threshold_R = 25000  # Threshold value to detect foot contact
 
         # Specify the CAN interface and channel
         try:

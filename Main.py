@@ -10,23 +10,23 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting'
-    subject = 'AB23_Min'
-    inclination = 'LG'
+    subject = 'test'
+    condition = 'static'
 
-    trial_name = f'task_estimator_12tasks-{subject}-{inclination}'
+    trial_name = f'test-{subject}-{condition}'
 
     pulse_after_start = 2  # seconds
-    trial_dur_sec = 20*4 + 5  # seconds
+    trial_dur_sec = 3 * 60  # seconds
     adjustment_duration = 10  # seconds
     exo_ON = True
     adaptation_ON = False
     replay_buffer_ON = False
 
     # Trigger setting
-    trigger_type = "mocap"  # "mocap" or "typing"
+    trigger_type = "typing"  # "mocap" or "typing"
 
     # Body mass setting
-    body_mass_kg = 50  # kg
+    body_mass_kg = 72  # kg
 
     # Model path
     # tcn_only
