@@ -13,26 +13,26 @@ if __name__ == '__main__':
     subject = 'test'
     condition = 'static'
 
-    trial_name = f'test-{subject}-{condition}'
+    trial_name = f'task_estimator-{subject}-{condition}'
 
     pulse_after_start = 2  # seconds
-    trial_dur_sec = 3 * 60  # seconds
-    adjustment_duration = 10  # seconds
+    trial_dur_sec = 4 * 15 + 10  # seconds
+    adjustment_duration = 5  # seconds
     exo_ON = True
     adaptation_ON = False
     replay_buffer_ON = False
 
     # Trigger setting
-    trigger_type = "typing"  # "mocap" or "typing"
+    trigger_type = "mocap"  # "mocap" or "typing"
 
     # Body mass setting
     body_mass_kg = 72  # kg
 
     # Model path
     # tcn_only
-    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-RD_flipped-transferred/heel_strike-RD_flipped-transferred.trt'
+    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-RD_flipped-bilateral-transfer/heel_strike-RD_flipped-bilateral-transfer.trt'
     # entire model (TCN + linear layer)
-    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-RD_flipped-transferred/heel_strike-RD_flipped-transferred.pt'
+    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-RD_flipped-bilateral-transfer/heel_strike-RD_flipped-bilateral-transfer.pt'
     # task estimator path
     trt_task_estimator_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/task_estimator-classifier_12tasks-transferred/task_estimator-classifier_12tasks-transferred.trt'
     # torque profile path

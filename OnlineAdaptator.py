@@ -36,6 +36,7 @@ def adaptation_worker_warmup(model, optimizer, criterion, device, model_path, in
                 optimizer.step()
                 break # Only need one step for warm-up
         print("Adaptation Worker: Warm-up complete.")
+        
     except Exception as e:
         print(f"Adaptation Worker: Error during warm-up: {e}")
 
@@ -214,10 +215,10 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
                 if rmse_bins[inc][spd] > replay_threshold:
                     train_loader_combined_list.append(train_loader[inc][spd][side])
                     bins_for_replay.append((inc, spd))
-                    print(f"Adaptation Worker: Replaying bins with RMSE > {replay_threshold}%: {bins_for_replay}")
-
+                    
             # Combine all top k replay bins
             if replay_buffer_ON and train_loader_combined_list:
+                print(f"Adaptation Worker: Replaying bins with RMSE > {replay_threshold}%: {bins_for_replay}")
                 train_loader_combined = torch.utils.data.ConcatDataset([loader.dataset for loader in train_loader_combined_list])
                 train_loader_combined = DataLoader(train_loader_combined, batch_size=16, shuffle=True, num_workers=0, pin_memory=True)
 
@@ -249,24 +250,25 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
                     optimizer.step()
                     tloss += loss.item()
                     num_batches += 1
-                    
+            
             avg_loss = tloss / num_batches if num_batches > 0 else 0
-
             print(f"avg loss: {avg_loss:.3f}")
-            if avg_loss < loss_threshold:
+                
+            rmse_current = rmse_monitoring(model, train_loader_current_task, device)
+                    
+            if rmse_current < 10.0:
                 bin_state[incline][speed][side] = 1
                 input_stream[incline][speed][side] = input_data
                 train_loader[incline][speed][side] = train_loader_current_task
                 rmse_bins[incline][speed] = rmse_monitoring(model, train_loader_current_task, device)
-                print(f"Adaptation Worker: {incline}-{speed}-{side} (current): {rmse_bins[incline][speed]:.2f}")
-                
-            prev_input_data = input_data # Store current data to prepare misdetection cases
-
+                prev_input_data = input_data # Store current data to prepare misdetection cases
+                print(f"Adaptation Worker: {incline}-{speed}-{side} (current): {rmse_bins[incline][speed]:.2f} (RMSE)")
+                                
             # After training, get the updated weights and send them back
             updated_weights = model.linear.weight.data.clone().cpu().numpy()
             updated_biases = model.linear.bias.data.clone().cpu().numpy()
 
-            output_q.put((side, avg_loss, rmse_bins, start_idx, updated_weights, updated_biases))
+            output_q.put((side, rmse_bins, rmse_current, start_idx, updated_weights, updated_biases))
 
         except Exception as e:
             print(f"Adaptation worker error: {e}")

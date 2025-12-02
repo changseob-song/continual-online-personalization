@@ -328,6 +328,10 @@ def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None,
             rmse_data[f'{incline}_{speed}_R'] = np.array([d[incline][speed] if d and incline in d and speed in d[incline] and d[incline][speed] is not None else np.nan for d in sliced_data['rmse_bins_R']])
 
     df_rmse = pd.DataFrame(rmse_data)
+    # Drop rows where all columns (except 'timestamp') are NaN
+    value_cols = [col for col in df_rmse.columns if col != 'timestamp']
+    df_rmse.dropna(subset=value_cols, how='all', inplace=True)
+
     df_rmse.to_csv(f'{trial_name}-rmse.csv', index=False)
     print(f'Data saved to {trial_name}-rmse.csv. Dimensions: {df_rmse.shape}')
 

@@ -138,9 +138,9 @@ class Controller:
         model_output_r_task = last_model_output_r_task; model_output_l_task = last_model_output_l_task
 
         update_latency_R, update_latency_L = 0.0, 0.0
-        avg_loss_R, avg_loss_L = 0.0, 0.0
         gp_loop_index, task_loop_index = 0, 0
         start_idx_L, start_idx_R = -1, -1
+        rmse_current_L, rmse_current_R = 10.0, 10.0
 
         # Initialize data structures to save data
         max_samples = int((self.trial_dur_sec + self.pulse_after_start) * 100)
@@ -225,10 +225,11 @@ class Controller:
             imu_R_reflected[1] *= -1; imu_R_reflected[3] *= -1; imu_R_reflected[5] *= -1
 
             # 4. Prepare the model input data
-            left_data, right_data = imu_L_reflected, imu_R
+            left_data, right_data = np.concatenate([imu_L_reflected, imu_R_reflected]), np.concatenate([imu_R, imu_L])
+            left_data_task, right_data_task = imu_L_reflected, imu_R
 
             left_data_norm, right_data_norm = (left_data - self.input_mean) / self.input_std, (right_data - self.input_mean) / self.input_std
-            left_data_norm_task, right_data_norm_task = (left_data[:6] - self.input_mean_task) / self.input_std_task, (right_data[:6] - self.input_mean_task) / self.input_std_task
+            left_data_norm_task, right_data_norm_task = (left_data_task - self.input_mean_task) / self.input_std_task, (right_data_task - self.input_mean_task) / self.input_std_task
 
             model_input_arr = fast_roll(model_input_arr)
             model_input_arr[0, :, -1], model_input_arr[1, :, -1] = left_data_norm, right_data_norm
@@ -295,15 +296,16 @@ class Controller:
             # Check for new weights from the adaptation worker
             updated_params = self.online_adaptator.get_updated_weights()
             if updated_params:
-                side, avg_loss, rmse_bins, start_index, weights, biases = updated_params
+                print(f'time: {loop_index / self.Exo.control_freq_Hz}')
+                side, rmse_bins, rmse_current, start_index, weights, biases = updated_params
                 if side == 'R':
                     self.linear_weights_R = weights;    self.linear_biases_R = biases
-                    start_idx_R = start_index;          log_rmse_bins_R[loop_index] = rmse_bins
-                    avg_loss_R = avg_loss;  update_latency_R = (loop_index - start_index) / self.Exo.control_freq_Hz
+                    start_idx_R = start_index;          log_rmse_bins_R[loop_index] = rmse_bins; rmse_current_R = rmse_current
+                    update_latency_R = (loop_index - start_index) / self.Exo.control_freq_Hz
                 elif side == 'L':
                     self.linear_weights_L = weights;    self.linear_biases_L = biases
-                    start_idx_L = start_index;          log_rmse_bins_L[loop_index] = rmse_bins
-                    avg_loss_L = avg_loss;  update_latency_L = (loop_index - start_index) / self.Exo.control_freq_Hz
+                    start_idx_L = start_index;          log_rmse_bins_L[loop_index] = rmse_bins; rmse_current_L = rmse_current
+                    update_latency_L = (loop_index - start_index) / self.Exo.control_freq_Hz
 
             # 5. TensorRT inference & Apply linear layer weights and biases
             if self.gait_phase_output_q.empty():
@@ -347,14 +349,14 @@ class Controller:
             delayed_gait_phase_L = (gait_phase_L - self.Exo.delay_factor) % 100
             delayed_gait_phase_R = (gait_phase_R - self.Exo.delay_factor) % 100
 
-            # if loop_index / self.Exo.control_freq_Hz >= self.pulse_after_start:
-            #     gradual_torque_scale = min(1.0, ((loop_index / self.Exo.control_freq_Hz) - self.pulse_after_start) / self.adjustment_duration)
-            # else:
-            #     gradual_torque_scale = 0.0
+            if loop_index / self.Exo.control_freq_Hz >= self.pulse_after_start:
+                gradual_torque_scale = min(1.0, ((loop_index / self.Exo.control_freq_Hz) - self.pulse_after_start) / self.adjustment_duration)
+            else:
+                gradual_torque_scale = 0.0
 
-            gradual_torque_scale_L = np.max((1 - avg_loss_L/1.0), 0)
-            gradual_torque_scale_R = np.max((1 - avg_loss_R/1.0), 0)
-
+            # scale the torque based on the adaptation loss & gradual ramp-up
+            gradual_torque_scale_L = np.max((1 - rmse_current_L/10) * gradual_torque_scale, 0)
+            gradual_torque_scale_R = np.max((1 - rmse_current_R/10) * gradual_torque_scale, 0)
 
             # 6.1 Get the task estimation outputs
             incline_pred_R = self.incline_keys[np.argmax(model_output_l_task[0])]; incline_pred_L = self.incline_keys[np.argmax(model_output_l_task[0])]
@@ -447,20 +449,14 @@ class Controller:
                 "gait_phase_R": gait_phase_R,
                 "incline_L_disc": current_incline_L,
                 "incline_R_disc": current_incline_R,
-                "incline_L_pred": incline_pred_L,
-                "incline_R_pred": incline_pred_R,
                 "speed_L_disc": current_speed_L,
                 "speed_R_disc": current_speed_R,
-                "speed_L_pred": speed_pred_L,
-                "speed_R_pred": speed_pred_R,
                 "cmd_L": motor_cmd_val_L,
                 "cmd_R": motor_cmd_val_R,
                 "update_latency_L": update_latency_L,
                 "update_latency_R": update_latency_R,
                 "start_idx_L": start_idx_L,
                 "start_idx_R": start_idx_R,
-                "avg_loss_L": avg_loss_L,
-                "avg_loss_R": avg_loss_R,
                 "loop_time_exceeded": loop_time_exceeded,
                 "gp_inference": (gp_loop_index-loop_index),
                 "task_inference": (task_loop_index-loop_index),
