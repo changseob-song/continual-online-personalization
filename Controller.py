@@ -7,20 +7,22 @@ from OnlineAdaptator import OnlineAdaptator
 from Utils_Mocap_Datastream import Mocap_trigger
 from Utils_GPIO import GPIO_control
 from Utils_Teleplot import Teleplot
-from Utils import lowpass_filter, fast_roll, gait_phase_inference_worker, cleanup_can, save_data, cartesian_to_percentage, NumpyCompatUnpickler, causal_filter
+from Utils import lowpass_filter, fast_roll, gait_phase_inference_worker, cleanup_can, save_data, save_weights_biases, cartesian_to_percentage, NumpyCompatUnpickler, causal_filter
 from Exo import Exo
 from scipy.signal import find_peaks
 
 class Controller:
-    def __init__(self, pt_model_path, trt_engine_path, task_sequence_path, torque_profile_path,
-                 trigger_type, trial_name, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
+    def __init__(self, pt_model_path, trt_engine_path, linear_layer_path, torque_profile_path,
+                 trigger_type, trial_name, course_num, incline, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
                  adaptation_ON=False, replay_buffer_ON=False):
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
+        self.linear_layer_path = linear_layer_path
         self.trt_engine_path = trt_engine_path
-        self.task_sequence_path = task_sequence_path
         self.trigger_type = trigger_type
         self.trial_name = trial_name
+        self.course_num = course_num
+        self.incline = incline
         self.body_mass_kg = body_mass_kg
         self.pulse_after_start = pulse_after_start
         self.trial_dur_sec = trial_dur_sec
@@ -42,9 +44,6 @@ class Controller:
         input_std_path = os.path.join(base_model_path, 'input_std.npy')
         label_mean_path = os.path.join(base_model_path, 'label_mean.npy')
         label_std_path = os.path.join(base_model_path, 'label_std.npy')
-
-        task_sequence_path = os.path.dirname(self.task_sequence_path)
-        self.task_sequence = pd.read_csv(self.task_sequence_path)
 
         self.input_mean = np.load(input_mean_path); self.input_std = np.load(input_std_path)
         self.label_mean = np.load(label_mean_path); self.label_std = np.load(label_std_path)
@@ -71,22 +70,28 @@ class Controller:
                                                   self.num_input_features, self.Exo.frame_length))
         self.gait_phase_inference_process.start()
 
-        # Extract linear layer weights and biases from the PyTorch model
-        state_dict = torch.load(self.pt_model_linear_path, map_location="cpu", weights_only=True)
-        self.linear_weights_R = state_dict['weight'].numpy().astype(np.float32)
-        self.linear_biases_R = state_dict['bias'].numpy().astype(np.float32)
-        self.linear_weights_L = self.linear_weights_R.copy()
-        self.linear_biases_L = self.linear_biases_R.copy()
+        # For the first course, load the pre-trained one
+        if self.course_num == 1:
+            # Extract linear layer weights and biases from the PyTorch model
+            state_dict = torch.load(self.pt_model_linear_path, map_location="cpu", weights_only=True)
+            self.linear_weights_R = state_dict['weight'].numpy().astype(np.float32)
+            self.linear_biases_R = state_dict['bias'].numpy().astype(np.float32)
+            self.linear_weights_L = self.linear_weights_R.copy()
+            self.linear_biases_L = self.linear_biases_R.copy()
+        # For the subsequent courses, load from the saved weight& bias file
+        else:
+            with open(self.linear_layer_path, "rb") as f:
+                linear_params = NumpyCompatUnpickler(f).load()
+            self.linear_weights_R = linear_params['weights_R'].astype(np.float32)
+            self.linear_biases_R = linear_params['biases_R'].astype(np.float32)
+            self.linear_weights_L = linear_params['weights_L'].astype(np.float32)
+            self.linear_biases_L = linear_params['biases_L'].astype(np.float32)
 
         # Initialize OnlineAdaptator
         self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.adaptation_ON, self.replay_buffer_ON)
 
-        self.incline_values = [-5, 0, 5]
-        self.incline_thresholds = [(self.incline_values[i] + self.incline_values[i+1]) / 2 for i in range(len(self.incline_values)-1)]
-        self.speed_values = [0.4, 0.7, 1.0, 1.3]
-        self.speed_thresholds = [(self.speed_values[i] + self.speed_values[i+1]) / 2 for i in range(len(self.speed_values)-1)]
-        self.incline_keys = {0: -5, 1: 0, 2: 5}
-        self.speed_keys = {0: 0.4, 1: 0.7, 2: 1.0, 3: 1.3}
+        self.incline_values = [-10, -5, 0, 5, 10]
+        self.incline_keys = {'RD_10': -10, 'RD_5': -5, 'LG': 0, 'RA_5': 5, 'RA_10': 10}
 
     def detect_heel_strike(self, GRF_data, threshold, min_interval):
         # Create binary GRF signal based on threshold
@@ -127,7 +132,7 @@ class Controller:
         start_idx_L, start_idx_R = -1, -1
         rmse_current_L, rmse_current_R = 0.0, 0.0
 
-        current_incline = 0; current_speed = 0.7  # Default task settings
+        current_incline = self.incline_keys[self.incline]; current_speed = 0.4  # Default task settings
         prev_incline = current_incline; prev_speed = current_speed
 
         # Initialize data structures to save data
@@ -140,8 +145,7 @@ class Controller:
             'GRF_L': np.zeros(max_samples), 'GRF_R': np.zeros(max_samples),
             'mtr_cmd_L': np.zeros(max_samples), 'mtr_cmd_R': np.zeros(max_samples),
             'gait_phase_L': np.zeros(max_samples), 'gait_phase_R': np.zeros(max_samples),
-            'incline_L': ['']*max_samples, 'speed_L': ['']*max_samples,
-            'incline_R': ['']*max_samples, 'speed_R': ['']*max_samples,
+            'incline': ['']*max_samples, 'speed': ['']*max_samples,
             'rmse_bins_L': ['']*max_samples, 'rmse_bins_R': ['']*max_samples,
             'gpio_output': np.zeros(max_samples)  # GPIO output state
         }
@@ -154,6 +158,7 @@ class Controller:
         log_GRF_L, log_GRF_R = self.data_to_save['GRF_L'], self.data_to_save['GRF_R']
         log_mtr_cmd_L, log_mtr_cmd_R = self.data_to_save['mtr_cmd_L'], self.data_to_save['mtr_cmd_R']
         log_gait_phase_L, log_gait_phase_R = self.data_to_save['gait_phase_L'], self.data_to_save['gait_phase_R']
+        log_incline = self.data_to_save['incline']; log_speed = self.data_to_save['speed']
 
         log_rmse_bins_L = self.data_to_save['rmse_bins_L']; log_rmse_bins_R = self.data_to_save['rmse_bins_R']
         log_gpio_output = self.data_to_save['gpio_output']
@@ -196,8 +201,9 @@ class Controller:
             log_imu_L[loop_index, :], log_imu_R[loop_index, :] = imu_L, imu_R
 
             # 2.1 Read the GRF values
-            GRF_L, GRF_R = self.mocap_trigger.get_GRF()
+            GRF_L, GRF_R, current_speed = self.mocap_trigger.get_GRF()
             log_GRF_L[loop_index] = GRF_L; log_GRF_R[loop_index] = GRF_R
+            log_incline[loop_index] = current_incline; log_speed[loop_index] = current_speed
 
             # 3. Mirror the left data to the right side (Unilateral model input)
             imu_L_reflected, imu_R_reflected = imu_L.copy(), imu_R.copy()
@@ -325,10 +331,6 @@ class Controller:
             gradual_torque_scale_L = np.max((1 - rmse_current_L/10) * gradual_torque_scale, 0)
             gradual_torque_scale_R = np.max((1 - rmse_current_R/10) * gradual_torque_scale, 0)
 
-            # Get current incline & speed from the task sequence
-            current_incline = self.task_sequence['incline'].iloc[loop_index]
-            current_speed = self.task_sequence['speed'].iloc[loop_index]
-
             # 7. Send the torque command to the motors
             if gait_phase_L < 3:
                 motor_cmd_val_L = self.torque_profile[current_incline][current_speed][int(gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_L
@@ -425,7 +427,8 @@ class Controller:
         self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_L, 0)
         self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, 0)
 
-        save_data(self.data_to_save, self.trial_name, self.pulse_after_start, self.trial_dur_sec, self.incline_values, self.speed_values)
+        save_data(self.data_to_save, self.trial_name, self.pulse_after_start, self.trial_dur_sec)
+        save_weights_biases(self.linear_weights_L, self.linear_biases_L, self.linear_weights_R, self.linear_biases_R, self.linear_layer_path)
         cleanup_can(self.Exo.bus, self.Exo.notifier)
         self.GPIO_control.safe_gpio_cleanup()
 

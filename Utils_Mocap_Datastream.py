@@ -15,6 +15,7 @@ class Mocap_trigger:
 
         self.GRF_R = 0.0
         self.GRF_L = 0.0
+        self.speed = 0.0
         self.time_sent = 0.0
 
         # Trigger handling
@@ -51,7 +52,7 @@ class Mocap_trigger:
         # Wait until at least one packet has arrived to ensure data validity
         self.first_data_received.wait()
         with self.lock:
-            return self.GRF_L, self.GRF_R
+            return self.GRF_L, self.GRF_R, self.speed
 
     def stream_start(self):
         """Start the data receiving loop in a background thread"""
@@ -94,6 +95,7 @@ class Mocap_trigger:
                         with self.lock:
                             self.GRF_R = float(data.get("GRF_R", 0.000))
                             self.GRF_L = float(data.get("GRF_L", 0.000))
+                            self.speed = float(data.get("speed", 0.00))
                             self.time_sent = send_time
                             
                             # Track Vicon timestamps for precise synchronization

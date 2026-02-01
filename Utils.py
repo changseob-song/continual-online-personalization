@@ -233,7 +233,7 @@ def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None,
     sliced_data = {k: v[start_idx:end_idx] for k, v in data_np.items()}
 
     # Define data for motor CSV
-    motor_cols = ['timestamp', 'mtr_pos_L', 'mtr_pos_R', 'mtr_vel_L', 'mtr_vel_R', 'fsr_L', 'fsr_R', 'gpio_output']
+    motor_cols = ['timestamp', 'mtr_pos_L', 'mtr_pos_R', 'mtr_vel_L', 'mtr_vel_R', 'GRF_L', 'GRF_R', 'gpio_output']
     save_dataframe(f'{trial_name}-input_motor.csv', sliced_data, motor_cols)
 
     # Define data for IMU CSV
@@ -254,24 +254,36 @@ def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None,
     # Define data for torque CSV
     torque_cols = ['timestamp', 'gait_phase_L', 'gait_phase_R', 
                    'mtr_cmd_L', 'mtr_cmd_R',
-                   'incline_L', 'speed_L', 'incline_R', 'speed_R', 
+                   'incline', 'speed',
                    'gpio_output']
     save_dataframe(f'{trial_name}-output_torque.csv', sliced_data, torque_cols)
 
     # Save RMSE data
-    rmse_data = {'timestamp': sliced_data['timestamp']}
-    for incline in incline_values:
-        for speed in speed_values:
-            rmse_data[f'{incline}_{speed}_L'] = np.array([d[incline][speed] if d and incline in d and speed in d[incline] and d[incline][speed] is not None else np.nan for d in sliced_data['rmse_bins_L']])
-            rmse_data[f'{incline}_{speed}_R'] = np.array([d[incline][speed] if d and incline in d and speed in d[incline] and d[incline][speed] is not None else np.nan for d in sliced_data['rmse_bins_R']])
+    # rmse_data = {'timestamp': sliced_data['timestamp']}
+    # for incline in incline_values:
+    #     for speed in speed_values:
+    #         rmse_data[f'{incline}_{speed}_L'] = np.array([d[incline][speed] if d and incline in d and speed in d[incline] and d[incline][speed] is not None else np.nan for d in sliced_data['rmse_bins_L']])
+    #         rmse_data[f'{incline}_{speed}_R'] = np.array([d[incline][speed] if d and incline in d and speed in d[incline] and d[incline][speed] is not None else np.nan for d in sliced_data['rmse_bins_R']])
 
-    df_rmse = pd.DataFrame(rmse_data)
-    # Drop rows where all columns (except 'timestamp') are NaN
-    value_cols = [col for col in df_rmse.columns if col != 'timestamp']
-    df_rmse.dropna(subset=value_cols, how='all', inplace=True)
+    # df_rmse = pd.DataFrame(rmse_data)
+    # # Drop rows where all columns (except 'timestamp') are NaN
+    # value_cols = [col for col in df_rmse.columns if col != 'timestamp']
+    # df_rmse.dropna(subset=value_cols, how='all', inplace=True)
 
-    df_rmse.to_csv(f'{trial_name}-rmse.csv', index=False)
-    print(f'Data saved to {trial_name}-rmse.csv. Dimensions: {df_rmse.shape}')
+    # df_rmse.to_csv(f'{trial_name}-rmse.csv', index=False)
+    # print(f'Data saved to {trial_name}-rmse.csv. Dimensions: {df_rmse.shape}')
+
+# Function to save linear layer weights and biases
+def save_weights_biases(linear_weights_L, linear_biases_L, linear_weights_R, linear_biases_R, linear_layer_path):
+    linear_params = {
+        'weights_L': linear_weights_L,
+        'biases_L': linear_biases_L,
+        'weights_R': linear_weights_R,
+        'biases_R': linear_biases_R
+    }
+    with open(linear_layer_path, "wb") as f:
+        pickle.dump(linear_params, f)
+    print(f'Linear layer weights and biases saved to {linear_layer_path}.')
 
 # Helper function to create and save DataFrame
 def save_dataframe(filename, data_dict, columns):
