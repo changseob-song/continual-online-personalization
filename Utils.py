@@ -216,68 +216,6 @@ def gait_phase_inference_worker(input_q, output_q, trt_engine_path,
     del runtime
     print("Gait Phase Worker: Exited.")
 
-def trt_inference_task(input_data, output_shapes, context):
-    # Use torch.tensor(...) on CUDA for input
-    d_input = torch.tensor(input_data, dtype=torch.float32, device='cuda')
-
-    # Create output tensors on CUDA
-    d_outputs = [torch.empty(*shape, dtype=torch.float32, device='cuda') for shape in output_shapes]
-
-    # Prepare bindings
-    bindings = [int(d_input.data_ptr())] + [int(d_output.data_ptr()) for d_output in d_outputs]
-
-    context.execute_v2(bindings=bindings)
-
-    # Copy outputs to CPU
-    outputs = [d_output.cpu().numpy() for d_output in d_outputs]
-    return outputs
-
-def task_inference_worker(input_q, output_q, trt_task_estimator_path,
-                          num_input_features, frame_length_task):
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-
-    logger = trt.Logger(trt.Logger.WARNING)
-    runtime = trt.Runtime(logger)
-
-    # Engine for task estimation
-    with open(trt_task_estimator_path, 'rb') as f:
-        serialized_engine_task = f.read()
-    engine_task = runtime.deserialize_cuda_engine(serialized_engine_task)
-    if engine_task is None:
-        print("Task Worker: Failed to deserialize TensorRT task estimator engine.")
-        return
-    context_task = engine_task.create_execution_context()
-
-    dummy_input_data_task = np.zeros((1, num_input_features, frame_length_task), dtype=np.float32)
-    output_shape_task = [(3,), (4,)]
-    
-    for _ in range(10):
-        _ = trt_inference_task(dummy_input_data_task, output_shape_task, context_task)
-    print("Task Estimation TensorRT engine warmed up.")
-
-    while True:
-        try:
-            data_in = input_q.get()
-            if data_in is None:  # Stop signal
-                print("Task Worker: Stop signal received. Exiting.")
-                break
-
-            model_input_arr_task_l, model_input_arr_task_r, loop_index = data_in
-
-            # Task estimation
-            model_output_task_l = trt_inference_task(model_input_arr_task_l, output_shape_task, context_task)
-            model_output_task_r = trt_inference_task(model_input_arr_task_r, output_shape_task, context_task)
-
-            output_q.put((model_output_task_l, model_output_task_r, loop_index))
-        except Exception as e:
-            print(f"Task Worker: Error during inference: {e}")
-            break
-    del context_task
-    del engine_task
-    del runtime
-    print("Task Worker: Exited.")
-
 # Function to save all collected dataif 
 def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None, incline_values=None, speed_values=None):
 

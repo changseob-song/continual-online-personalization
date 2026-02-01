@@ -36,7 +36,7 @@ def adaptation_worker_warmup(model, optimizer, criterion, device, model_path, in
                 optimizer.step()
                 break # Only need one step for warm-up
         print("Adaptation Worker: Warm-up complete.")
-        
+
     except Exception as e:
         print(f"Adaptation Worker: Error during warm-up: {e}")
 
@@ -147,6 +147,8 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
             # Wait for data from the main controller
             side, incline, speed, input_data, mid_peak_idx, start_idx = input_q.get() # input data shape : (length, channel num)
 
+            start_time = time.time()
+
             misdetection_threshold = (1.5 + 0.45 * speed) * 100  # Convert to frames
             # Detect the heelstrike misdetection
             if (mid_peak_idx[0] > misdetection_threshold) or (input_data.shape[0] - mid_peak_idx[-1] > misdetection_threshold) or (np.diff(mid_peak_idx) > misdetection_threshold).any():
@@ -197,7 +199,7 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
                     sampled_subset = Subset(original_subset.dataset, sampled_indices)
                     
                     # Create a loader for the sampled dataset
-                    full_loader = DataLoader(sampled_subset, batch_size=32, shuffle=False, num_workers=0, pin_memory=True)
+                    full_loader = DataLoader(sampled_subset, batch_size=16, shuffle=False, num_workers=0, pin_memory=True)
 
                     # Calculate RMSE
                     rmse_bins[inc][spd] = rmse_monitoring(model, full_loader, device)
@@ -267,6 +269,8 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
             # After training, get the updated weights and send them back
             updated_weights = model.linear.weight.data.clone().cpu().numpy()
             updated_biases = model.linear.bias.data.clone().cpu().numpy()
+
+            print(f"time taken for adaptation: {time.time() - start_time:.2f} seconds")
 
             output_q.put((side, rmse_bins, rmse_current, start_idx, updated_weights, updated_biases))
 

@@ -1,7 +1,6 @@
 import can
 import Utils_tmotor_v3, Utils_actuator_group
 from Utils_ICM20948_I2C_pcb2 import ICM20948_I2C_IMUs
-from Utils_ADS1115_I2C import ADS1115_I2C
 
 class Exo:
     def __init__(self,):
@@ -14,7 +13,7 @@ class Exo:
         self.frame_length_task = 200  # Window size for task estimator (in frames)
 
         # biotorque parameters
-        self.scale_factor = 0.20
+        self.scale_factor = 0.3
         self.delay_factor = 0  # Number of frames to delay the torque command
         self.max_torque = 12.5  # Maximum allowable torque (Nm)
 
@@ -25,11 +24,6 @@ class Exo:
 
         # IMU initialization
         self.imus = ICM20948_I2C_IMUs()  # Back, Left hip, Right hip
-
-        # FSR initialization
-        self.fsr_adc = ADS1115_I2C()
-        self.fsr_threshold_L = 15000  # Threshold value to detect foot contact
-        self.fsr_threshold_R = 15000  # Threshold value to detect foot contact
 
         # Specify the CAN interface and channel
         try:
