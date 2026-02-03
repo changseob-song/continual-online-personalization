@@ -14,11 +14,6 @@ def adaptation_worker_warmup(model, optimizer, criterion, device, model_path, in
     try:
         # Create enough data for a few gait cycles and at least one batch
         dummy_input_data = np.zeros((300, hyperparam_config['input_size']), dtype=np.float32)
-        
-        # Simulate peaks for gait cycle detection in LoadData
-        dummy_input_data[50, 5] = -100
-        dummy_input_data[150, 5] = -100
-        dummy_input_data[250, 5] = -100
 
         # Use one of the models (e.g., model_R) for the warm-up
         warmup_dataset = LoadData('R', 'LG', '1p0mps', dummy_input_data, np.array([10]), model_path, input_mean, input_std, label_mean, label_std)
@@ -129,8 +124,8 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
 
     adaptation_worker_warmup(model_R, optimizer_R, criterion, device, model_path, input_mean, input_std, label_mean, label_std)
 
-    incline_values = [-5, 0, 5]
-    speed_values = [0.4, 0.7, 1.0, 1.3]
+    incline_values = [-10, -5, 0, 5, 10]
+    speed_values = [.3, .4, .5, .6, .7, .8, .9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]
     bin_state = {inc: {spd: {side: 0 for side in ['L', 'R']} for spd in speed_values} for inc in incline_values}
     input_stream = {inc: {spd: {side: None for side in ['L', 'R']} for spd in speed_values} for inc in incline_values}
     train_loader = {inc: {spd: {side: None for side in ['L', 'R']} for spd in speed_values} for inc in incline_values}
@@ -203,7 +198,7 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
 
                     # Calculate RMSE
                     rmse_bins[inc][spd] = rmse_monitoring(model, full_loader, device)
-                    print(f"Adaptation Worker: {inc}-{spd}-{side}: {rmse_bins[inc][spd]:.2f} (RMSE)")
+                    print(f"Adaptation Worker monitoring: {inc}-{spd}-{side}: {rmse_bins[inc][spd]:.2f} (RMSE)")
                 
             # Select top-k highest RMSE bins
             k = min(min_replay_num, len(positive_bins))  # Choose up to 4
@@ -253,8 +248,8 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
                     tloss += loss.item()
                     num_batches += 1
             
-            avg_loss = tloss / num_batches if num_batches > 0 else 0
-            print(f"avg loss: {avg_loss:.3f}")
+            # avg_loss = tloss / num_batches if num_batches > 0 else 0
+            # print(f"avg loss: {avg_loss:.3f}")
                 
             rmse_current = rmse_monitoring(model, train_loader_current_task, device)
                     
@@ -264,7 +259,7 @@ def adaptation_worker_process(input_q, output_q, model_path, hyperparam_config, 
                 train_loader[incline][speed][side] = train_loader_current_task
                 rmse_bins[incline][speed] = rmse_monitoring(model, train_loader_current_task, device)
                 prev_input_data = input_data # Store current data to prepare misdetection cases
-                print(f"Adaptation Worker: {incline}-{speed}-{side} (current): {rmse_bins[incline][speed]:.2f} (RMSE)")
+                print(f"Adaptation Worker monitoring: {incline}-{speed}-{side} (current): {rmse_bins[incline][speed]:.2f} (RMSE)")
                                 
             # After training, get the updated weights and send them back
             updated_weights = model.linear.weight.data.clone().cpu().numpy()

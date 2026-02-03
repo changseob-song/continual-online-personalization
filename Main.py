@@ -9,19 +9,19 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting'
-    subject = 'SK_Maria'
-    condition = 'adapted'
-    course_num = 2
+    subject = 'Changseob'
+    condition = 'buffer'
+    course_num = 1
     incline = 'LG'
 
     trial_name = f'pilot-{subject}-{condition}-{course_num}_{incline}'
 
     pulse_after_start = 10  # seconds
-    trial_dur_sec = 4 * 60 + 10  # seconds
+    trial_dur_sec = 255  # seconds
     adjustment_duration = 10  # seconds
-    exo_ON = False
+    exo_ON = True
     adaptation_ON = True
-    replay_buffer_ON = False
+    replay_buffer_ON = True
 
     # Trigger setting
     trigger_type = "mocap"  # "mocap" or "typing"
@@ -31,9 +31,9 @@ if __name__ == '__main__':
 
     # Model path
     # tcn_only
-    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-RD_flipped-bilateral-transfer/heel_strike-RD_flipped-bilateral-transfer.trt'
+    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/motor_bilateral_pos_vel/motor_bilateral_pos_vel.trt'
     # entire model (TCN + linear layer)
-    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/heel_strike-RD_flipped-bilateral-transfer/heel_strike-RD_flipped-bilateral-transfer.pt'
+    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/motor_bilateral_pos_vel/motor_bilateral_pos_vel.pt'
     # Linear layer numpy file
     linear_layer_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/linear_layer_weights_biases.pkl'
     # torque profile path

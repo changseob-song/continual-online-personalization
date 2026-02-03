@@ -132,11 +132,11 @@ class Controller:
         start_idx_L, start_idx_R = -1, -1
         rmse_current_L, rmse_current_R = 0.0, 0.0
 
-        current_incline = self.incline_keys[self.incline]; current_speed = 0.4  # Default task settings
-        prev_incline = current_incline; prev_speed = current_speed
+        current_incline = self.incline_keys[self.incline];  # Default task settings
+        prev_incline = current_incline
 
         # Initialize data structures to save data
-        max_samples = int((self.trial_dur_sec + self.pulse_after_start) * 100)
+        max_samples = int((self.trial_dur_sec + self.pulse_after_start + 5) * 100) # Extra 5 sec for slowing down
         self.data_to_save = {
             'timestamp': np.zeros(max_samples),
             'mtr_pos_L': np.zeros(max_samples), 'mtr_pos_R': np.zeros(max_samples),
@@ -202,6 +202,7 @@ class Controller:
 
             # 2.1 Read the GRF values
             GRF_L, GRF_R, current_speed = self.mocap_trigger.get_GRF()
+            # GRF_L, GRF_R, current_speed = 0, 0, 0.6
             log_GRF_L[loop_index] = GRF_L; log_GRF_R[loop_index] = GRF_R
             log_incline[loop_index] = current_incline; log_speed[loop_index] = current_speed
 
@@ -211,7 +212,8 @@ class Controller:
             imu_R_reflected[1] *= -1; imu_R_reflected[3] *= -1; imu_R_reflected[5] *= -1
 
             # 4. Prepare the model input data
-            left_data, right_data = np.concatenate([imu_L_reflected, imu_R_reflected]), np.concatenate([imu_R, imu_L])
+            left_data, right_data = np.array([mtr_pos_L, mtr_vel_L, mtr_pos_R, mtr_vel_R]), np.array([mtr_pos_R, mtr_vel_R, mtr_pos_L, mtr_vel_L])
+            # left_data, right_data = np.concatenate([imu_L_reflected, imu_R_reflected]), np.concatenate([imu_R, imu_L])
 
             left_data_norm, right_data_norm = (left_data - self.input_mean) / self.input_std, (right_data - self.input_mean) / self.input_std
 
@@ -321,28 +323,21 @@ class Controller:
             elif (gait_phase_R - gait_phase_R_prev) > 30: gait_phase_R = gait_phase_R_prev
             else: gait_phase_R_prev = gait_phase_R
 
-
-            if loop_index / self.Exo.control_freq_Hz >= self.pulse_after_start:
-                gradual_torque_scale = min(1.0, ((loop_index / self.Exo.control_freq_Hz)) / self.adjustment_duration)
-            else:
-                gradual_torque_scale = 0.0
-
-            # scale the torque based on the adaptation loss & gradual ramp-up
-            gradual_torque_scale_L = np.max((1 - rmse_current_L/10) * gradual_torque_scale, 0)
-            gradual_torque_scale_R = np.max((1 - rmse_current_R/10) * gradual_torque_scale, 0)
+            # Calculate gradual torque scaling factor
+            gradual_torque_scale = min(1.0, ((loop_index / self.Exo.control_freq_Hz)) / self.adjustment_duration)
 
             # 7. Send the torque command to the motors
             if gait_phase_L < 3:
-                motor_cmd_val_L = self.torque_profile[current_incline][current_speed][int(gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_L
+                motor_cmd_val_L = self.torque_profile[current_incline][current_speed][int(gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale
                 prev_incline = current_incline; prev_speed = current_speed
             else:
-                motor_cmd_val_L = self.torque_profile[prev_incline][prev_speed][int(gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_L
+                motor_cmd_val_L = self.torque_profile[prev_incline][prev_speed][int(gait_phase_L)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale
             
             if gait_phase_R < 3:
-                motor_cmd_val_R = self.torque_profile[current_incline][current_speed][int(gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_R
+                motor_cmd_val_R = self.torque_profile[current_incline][current_speed][int(gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale
                 prev_incline = current_incline; prev_speed = current_speed
             else:
-                motor_cmd_val_R = self.torque_profile[prev_incline][prev_speed][int(gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale_R
+                motor_cmd_val_R = self.torque_profile[prev_incline][prev_speed][int(gait_phase_R)] * self.body_mass_kg * self.Exo.scale_factor * gradual_torque_scale
 
             motor_cmd_array = fast_roll(motor_cmd_array)
             motor_cmd_array[:, -1] = [motor_cmd_val_R, motor_cmd_val_L]    
@@ -393,16 +388,16 @@ class Controller:
             telemetry_data = {
                 "pos_L": mtr_pos_L,
                 "pos_R": mtr_pos_R,
-                "gyroY_L": imu_L[4],
-                "gyroY_R": imu_R[4],
+                # "gyroY_L": imu_L[4],
+                # "gyroY_R": imu_R[4],
                 "GRF_L": GRF_L,
                 "GRF_R": GRF_R,
                 "gait_phase_L": gait_phase_L,
                 "gait_phase_R": gait_phase_R,
-                "incline": current_incline,
-                "speed": current_speed,
                 "cmd_L": motor_cmd_val_L,
                 "cmd_R": motor_cmd_val_R,
+                "incline": current_incline,
+                "speed": current_speed,
                 "update_latency_L": update_latency_L,
                 "update_latency_R": update_latency_R,
                 "start_idx_L": start_idx_L,
