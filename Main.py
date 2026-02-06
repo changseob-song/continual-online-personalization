@@ -38,9 +38,11 @@ if __name__ == '__main__':
     linear_layer_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/linear_layer_weights_biases.pkl'
     # torque profile path
     torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/torque_splines.pkl'
+    # PCA model path
+    pca_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/pca_model_mtr.pkl'
     
     # Initialize Control loop class
-    controller = Controller(pt_model_path, trt_engine_path, linear_layer_path, torque_profile_path,
+    controller = Controller(pt_model_path, trt_engine_path, linear_layer_path, torque_profile_path, pca_model_path,
                             trigger_type, trial_name, course_num, incline,
                             pulse_after_start, trial_dur_sec, adjustment_duration,
                             body_mass_kg,

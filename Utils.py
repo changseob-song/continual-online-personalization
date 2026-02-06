@@ -258,20 +258,19 @@ def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None,
                    'gpio_output']
     save_dataframe(f'{trial_name}-output_torque.csv', sliced_data, torque_cols)
 
-    # Save RMSE data
-    # rmse_data = {'timestamp': sliced_data['timestamp']}
-    # for incline in incline_values:
-    #     for speed in speed_values:
-    #         rmse_data[f'{incline}_{speed}_L'] = np.array([d[incline][speed] if d and incline in d and speed in d[incline] and d[incline][speed] is not None else np.nan for d in sliced_data['rmse_bins_L']])
-    #         rmse_data[f'{incline}_{speed}_R'] = np.array([d[incline][speed] if d and incline in d and speed in d[incline] and d[incline][speed] is not None else np.nan for d in sliced_data['rmse_bins_R']])
+    # Save input_reduced and grid_key data
+    pc_data = {'timestamp': sliced_data['timestamp']}
+    for side in ['L', 'R']:
+        pc_data[f'input_reduced_{side}'] = sliced_data[f'input_reduced_{side}']
+        pc_data[f'grid_key_{side}'] = sliced_data[f'grid_key_{side}']
 
-    # df_rmse = pd.DataFrame(rmse_data)
-    # # Drop rows where all columns (except 'timestamp') are NaN
-    # value_cols = [col for col in df_rmse.columns if col != 'timestamp']
-    # df_rmse.dropna(subset=value_cols, how='all', inplace=True)
+    df_pc = pd.DataFrame(pc_data)
+    # Drop rows where all columns (except 'timestamp') are NaN
+    value_cols = [col for col in df_pc.columns if col != 'timestamp']
+    df_pc.dropna(subset=value_cols, how='all', inplace=True)
 
-    # df_rmse.to_csv(f'{trial_name}-rmse.csv', index=False)
-    # print(f'Data saved to {trial_name}-rmse.csv. Dimensions: {df_rmse.shape}')
+    df_pc.to_csv(f'{trial_name}-pc.csv', index=False)
+    print(f'Data saved to {trial_name}-pc.csv. Dimensions: {df_pc.shape}')
 
 # Function to save linear layer weights and biases
 def save_weights_biases(linear_weights_L, linear_biases_L, linear_weights_R, linear_biases_R, linear_layer_path):

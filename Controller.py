@@ -12,13 +12,14 @@ from Exo import Exo
 from scipy.signal import find_peaks
 
 class Controller:
-    def __init__(self, pt_model_path, trt_engine_path, linear_layer_path, torque_profile_path,
+    def __init__(self, pt_model_path, trt_engine_path, linear_layer_path, torque_profile_path, pca_model_path,
                  trigger_type, trial_name, course_num, incline, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
                  adaptation_ON=False, replay_buffer_ON=False):
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
         self.linear_layer_path = linear_layer_path
         self.trt_engine_path = trt_engine_path
+        self.pca_model_path = pca_model_path
         self.trigger_type = trigger_type
         self.trial_name = trial_name
         self.course_num = course_num
@@ -88,7 +89,7 @@ class Controller:
             self.linear_biases_L = linear_params['biases_L'].astype(np.float32)
 
         # Initialize OnlineAdaptator
-        self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.adaptation_ON, self.replay_buffer_ON)
+        self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.pca_model_path, self.adaptation_ON, self.replay_buffer_ON)
 
         self.incline_values = [-10, -5, 0, 5, 10]
         self.incline_keys = {'RD_10': -10, 'RD_5': -5, 'LG': 0, 'RA_5': 5, 'RA_10': 10}
@@ -130,7 +131,6 @@ class Controller:
         update_latency_R, update_latency_L = 0.0, 0.0
         gp_loop_index = 0
         start_idx_L, start_idx_R = -1, -1
-        rmse_current_L, rmse_current_R = 0.0, 0.0
 
         current_incline = self.incline_keys[self.incline];  # Default task settings
         prev_incline = current_incline
@@ -146,7 +146,8 @@ class Controller:
             'mtr_cmd_L': np.zeros(max_samples), 'mtr_cmd_R': np.zeros(max_samples),
             'gait_phase_L': np.zeros(max_samples), 'gait_phase_R': np.zeros(max_samples),
             'incline': ['']*max_samples, 'speed': ['']*max_samples,
-            'rmse_bins_L': ['']*max_samples, 'rmse_bins_R': ['']*max_samples,
+            'input_reduced_R': ['']*max_samples, 'input_reduced_L': ['']*max_samples,
+            'grid_key_R': ['']*max_samples, 'grid_key_L': ['']*max_samples,
             'gpio_output': np.zeros(max_samples)  # GPIO output state
         }
 
@@ -160,7 +161,8 @@ class Controller:
         log_gait_phase_L, log_gait_phase_R = self.data_to_save['gait_phase_L'], self.data_to_save['gait_phase_R']
         log_incline = self.data_to_save['incline']; log_speed = self.data_to_save['speed']
 
-        log_rmse_bins_L = self.data_to_save['rmse_bins_L']; log_rmse_bins_R = self.data_to_save['rmse_bins_R']
+        log_input_reduced_L = self.data_to_save['input_reduced_L']; log_input_reduced_R = self.data_to_save['input_reduced_R']
+        log_grid_key_L = self.data_to_save['grid_key_L']; log_grid_key_R = self.data_to_save['grid_key_R']
         log_gpio_output = self.data_to_save['gpio_output']
 
         # Start recording time
@@ -280,15 +282,15 @@ class Controller:
             # Check for new weights from the adaptation worker
             updated_params = self.online_adaptator.get_updated_weights()
             if updated_params:
-                side, rmse_bins, rmse_current, start_index, weights, biases = updated_params
+                side, input_reduced, grid_key, start_index, weights, biases = updated_params
                 if side == 'R':
                     self.linear_weights_R = weights;    self.linear_biases_R = biases
-                    start_idx_R = start_index;          log_rmse_bins_R[loop_index] = rmse_bins; rmse_current_R = rmse_current
+                    start_idx_R = start_index;      log_input_reduced_R[loop_index] = input_reduced; log_grid_key_R[loop_index] = grid_key
                     update_latency_R = (loop_index - start_index) / self.Exo.control_freq_Hz
                     print(f'Update latency (R): {update_latency_R:.2f} sec')
                 elif side == 'L':
                     self.linear_weights_L = weights;    self.linear_biases_L = biases
-                    start_idx_L = start_index;          log_rmse_bins_L[loop_index] = rmse_bins; rmse_current_L = rmse_current
+                    start_idx_L = start_index;      log_input_reduced_L[loop_index] = input_reduced; log_grid_key_L[loop_index] = grid_key
                     update_latency_L = (loop_index - start_index) / self.Exo.control_freq_Hz
                     print(f'Update latency (L): {update_latency_L:.2f} sec')
 
