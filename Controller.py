@@ -287,12 +287,10 @@ class Controller:
                     self.linear_weights_R = weights;    self.linear_biases_R = biases
                     start_idx_R = start_index;      log_input_reduced_R[loop_index] = input_reduced; log_grid_key_R[loop_index] = grid_key
                     update_latency_R = (loop_index - start_index) / self.Exo.control_freq_Hz
-                    print(f'Update latency (R): {update_latency_R:.2f} sec')
                 elif side == 'L':
                     self.linear_weights_L = weights;    self.linear_biases_L = biases
                     start_idx_L = start_index;      log_input_reduced_L[loop_index] = input_reduced; log_grid_key_L[loop_index] = grid_key
                     update_latency_L = (loop_index - start_index) / self.Exo.control_freq_Hz
-                    print(f'Update latency (L): {update_latency_L:.2f} sec')
 
             # 5. TensorRT inference & Apply linear layer weights and biases
             if self.gait_phase_output_q.empty():
@@ -314,6 +312,7 @@ class Controller:
             model_output_l_denorm = model_output_l_val * self.label_std + self.label_mean
             model_output_r_denorm = model_output_r_val * self.label_std + self.label_mean
             gait_phase_L, gait_phase_R = cartesian_to_percentage(model_output_l_denorm), cartesian_to_percentage(model_output_r_denorm)
+            gait_phase_L_, gait_phase_R_ = gait_phase_L, gait_phase_R # store the non-filtered version for the logic below
 
             # Store previous gait phase if decreasing 
             if (3 < gait_phase_L_prev < 93) and (gait_phase_L < gait_phase_L_prev): gait_phase_L = gait_phase_L_prev # handle the case that decreases suddenly
@@ -390,12 +389,16 @@ class Controller:
             telemetry_data = {
                 "pos_L": mtr_pos_L,
                 "pos_R": mtr_pos_R,
+                "vel_L": mtr_vel_L,
+                "vel_R": mtr_vel_R,
                 # "gyroY_L": imu_L[4],
                 # "gyroY_R": imu_R[4],
                 "GRF_L": GRF_L,
                 "GRF_R": GRF_R,
                 "gait_phase_L": gait_phase_L,
                 "gait_phase_R": gait_phase_R,
+                "gait_phase_L_": gait_phase_L_,
+                "gait_phase_R_": gait_phase_R_,
                 "cmd_L": motor_cmd_val_L,
                 "cmd_R": motor_cmd_val_R,
                 "incline": current_incline,

@@ -1,7 +1,8 @@
 # %%
+import sys
 from Hyperparam import hyperparam_config
 from Model import TCN
-import torch, os, time, random
+import torch, os, time, random, pickle
 import numpy as np
 import multiprocessing as mp
 from torch.utils.data import Dataset, Subset, DataLoader
@@ -48,7 +49,7 @@ def upsampling(data, target_length):
 def upsampling_2d(data, target_length):
     """
     Upsample a 2D numpy array to the desired target length using linear interpolation.
-    data: numpy array of shape (n_features, n_samples)
+    data: numpy array of shape (n_samples, n_features)
     target_length: desired length of each segment after upsampling
     """
     upsampled_data = np.zeros((target_length, data.shape[1]))
@@ -88,30 +89,23 @@ def rmse_monitoring(model, full_loader, device):
     rmse = torch.sqrt(torch.mean(error**2)).item()
     return rmse
 
-def pca_transform_reconstruction(input_data, mid_peak_idx, pca_matrix, pca_mean, pca_scale):
+def pca_transform_reconstruction(input_data, pca_matrix, pca_mean, pca_scale):
     # Prepare the pca input
-    mid_peak_idx = int(mid_peak_idx[0])
-    input_length_1 = mid_peak_idx
-    input_length_2 = input_data.shape[0] - mid_peak_idx # input data shape : (length, channel num)
+    input_length = input_data.shape[0] # input data shape : (length, channel num)
 
-    input_data_resampled_1 = upsampling_2d(input_data[:mid_peak_idx, :], 20)  # output data shape: (100, channel num)
-    input_data_resampled_2 = upsampling_2d(input_data[mid_peak_idx:, :], 20)  # output data shape: (100, channel num)
-    input_data_scaled_1 = (np.r_[input_data_resampled_1.flatten(), input_length_1] - pca_mean) / pca_scale # shape: (401,)
-    input_data_scaled_2 = (np.r_[input_data_resampled_2.flatten(),input_length_2] - pca_mean) / pca_scale # shape: (401,)
-    input_data_reduced_1 = np.dot(input_data_scaled_1, pca_matrix)  # shape: (3,)
-    input_data_reduced_2 = np.dot(input_data_scaled_2, pca_matrix)  # shape: (3,)
+    input_data_resampled = upsampling_2d(input_data, 100)  # output data shape: (100, channel num)
+    input_data_scaled = (np.r_[input_data_resampled.flatten(), input_length] - pca_mean) / pca_scale # shape: (401,)
+    input_data_reduced = np.dot(input_data_scaled, pca_matrix)  # shape: (3,)
 
     # Reconstruct example data
-    input_data_reconstructed_scaled_1 = np.dot(input_data_reduced_1, pca_matrix.T)
-    input_data_reconstructed_scaled_2 = np.dot(input_data_reduced_2, pca_matrix.T)
-    input_data_reconstructed_1 = input_data_reconstructed_scaled_1 * pca_scale + pca_mean
-    input_data_reconstructed_2 = input_data_reconstructed_scaled_2 * pca_scale + pca_mean
+    input_data_reconstructed_scaled = np.dot(input_data_reduced, pca_matrix.T)
+    input_data_reconstructed = input_data_reconstructed_scaled * pca_scale + pca_mean
 
     # Calculate reconstruction error
-    reconstruction_error_scaled_1 = np.sqrt(np.mean((input_data_scaled_1 - input_data_reconstructed_scaled_1) ** 2))
-    reconstruction_error_scaled_2 = np.sqrt(np.mean((input_data_scaled_2 - input_data_reconstructed_scaled_2) ** 2))
+    reconstruction_error_scaled = np.sqrt(np.mean((input_data_scaled - input_data_reconstructed_scaled) ** 2))
 
-    return np.mean([input_data_reduced_1, input_data_reduced_2], axis=0) , np.mean([reconstruction_error_scaled_1, reconstruction_error_scaled_2])
+    return input_data_reduced, reconstruction_error_scaled
+
 
 def adaptation_worker_process(input_q, output_q, model_path, pca_model_path, hyperparam_config, adaptation_ON=False, replay_buffer_ON=False):
     """
@@ -162,12 +156,9 @@ def adaptation_worker_process(input_q, output_q, model_path, pca_model_path, hyp
     avg_loss = 0
     misdetection_flag = False
     
-    min_adaptation_before_replay = 4 # Minimum number of adaptation steps before starting replay
-    min_adaptation_count = 0
     min_replay_num = 4 # Minimum number of bins to consider for replay
     loss_threshold = 1.0 # Loss threshold to accept a training step
     replay_threshold = 3.0 # RMSE threshold (%) to include a bin in the replay buffer
-    grid_resolution = 2
 
     # Main loop to wait for data and fine-tune
     while True:
@@ -176,22 +167,25 @@ def adaptation_worker_process(input_q, output_q, model_path, pca_model_path, hyp
             side, incline, speed, input_data, mid_peak_idx, start_idx = input_q.get() # input data shape : (length, channel num)
 
             start_time = time.time()
-
             # Determine either left or right side
             model = model_R if side == 'R' else model_L
             optimizer = optimizer_R if side == 'R' else optimizer_L
 
+
             # 1. Go through PCA transformation
-            input_data_reduced, reconstruction_error_scaled = pca_transform_reconstruction(input_data, mid_peak_idx, pca_matrix, pca_mean, pca_scale)
-            # print(f"Adaptation Worker: PCA transformation done. Reconstruction error (scaled): {reconstruction_error_scaled:.2f}")
+            input_data_reduced, reconstruction_error_scaled = pca_transform_reconstruction(input_data, pca_matrix, pca_mean, pca_scale)
+            print(f"input data (Reduced): {input_data_reduced}")
+            print(f"Adaptation Worker: PCA transformation done. Reconstruction error (scaled): {reconstruction_error_scaled:.2f}")
+
 
             # 2. Check misdetection based on reconstruction error 
-            if reconstruction_error_scaled > 5.0:
+            if reconstruction_error_scaled > 1.0:
                 print(f"Adaptation Worker: High reconst. error detected: {reconstruction_error_scaled:.2f}")
-                # misdetection_flag = True
+                misdetection_flag = True
             else:
                 misdetection_flag = False
-            
+
+
             if not misdetection_flag:
 
                 # 3. Prepare the data loader for the current task
@@ -203,19 +197,18 @@ def adaptation_worker_process(input_q, output_q, model_path, pca_model_path, hyp
                 train_loader_current_task = DataLoader(subset, batch_size=16, shuffle=True, num_workers=0, pin_memory=True) # Use num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
 
                 # 4. Get the coordinate of the reduced input data in replay buffer grid
-                grid_key = tuple((input_data_reduced // grid_resolution).astype(int))
-                print("Grid key: ", grid_key, "Input reduced: ", input_data_reduced)
+                grid_key = tuple((input_data_reduced // 2).astype(int))
+                print("Grid key: ", grid_key)
 
-                if min_adaptation_count >= min_adaptation_before_replay:
-                    if grid_key not in bin_grid[side]: # New grid point
-                        bin_grid[side].append(grid_key)
-                        bin_data[side].append(input_data)
-                        bin_loader[side].append(train_loader_current_task)
-                    else: # Existing grid point, update data
-                        existing_idx = bin_grid[side].index(grid_key)
-                        bin_data[side][existing_idx] = input_data
-                        bin_loader[side][existing_idx] = train_loader_current_task
-
+                if grid_key not in bin_grid[side]: # New grid point
+                    bin_grid[side].append(grid_key)
+                    bin_data[side].append(input_data)
+                    bin_loader[side].append(train_loader_current_task)
+                else: # Existing grid point, update data
+                    existing_idx = bin_grid[side].index(grid_key)
+                    bin_data[side][existing_idx] = input_data
+                    bin_loader[side][existing_idx] = train_loader_current_task
+                                
 
             # 6. Compute RMSE for all bins in the replay buffer
             with torch.no_grad(): # Disable gradient calculation for inference
@@ -236,8 +229,9 @@ def adaptation_worker_process(input_q, output_q, model_path, pca_model_path, hyp
 
                     # Calculate RMSE
                     bin_rmse.append(rmse_monitoring(model, full_loader, device))
-                    # print(f"Adaptation Worker monitoring: {side} - {bin_idx}: {bin_rmse[bin_idx]:.2f} (RMSE)")
-             
+                    print(f"Adaptation Worker monitoring: {side} - {bin_idx}: {bin_rmse[bin_idx]:.2f} (RMSE)")
+                
+
             # 7. Select top-k highest RMSE bins
             bin_size = len(bin_grid[side])
             k = min(min_replay_num, bin_size)  # Choose up to 4
@@ -255,18 +249,19 @@ def adaptation_worker_process(input_q, output_q, model_path, pca_model_path, hyp
                 print(f"Adaptation Worker: Replaying bins with RMSE > {replay_threshold}%: {bins_for_replay}")
 
             # Add the current task data to the replay if no misdetection
-            if not misdetection_flag :
-                train_loader_combined_list.append(train_loader_current_task)                    
-
+            if not misdetection_flag:
+                print("Current task input shape: ", train_loader_current_task.dataset.dataset.input.shape)
+                train_loader_combined_list.append(train_loader_current_task)
+                    
             # 9. Combine all top k replay bins
             if train_loader_combined_list:
                 train_loader_combined = torch.utils.data.ConcatDataset([loader.dataset for loader in train_loader_combined_list])
                 train_loader_combined = DataLoader(train_loader_combined, batch_size=16, shuffle=True, num_workers=0, pin_memory=True)
 
-                tloss = 0
+                t_loss = 0
                 num_batches = 0
-
-                for input_batch, label_batch in train_loader_combined:
+                # Training loop - other tasks that is already in the buffer
+                for input_batch, label_batch in train_loader_current_task:
                     input_batch = input_batch.to(device)
                     label_batch = label_batch.to(device)
                     
@@ -274,22 +269,18 @@ def adaptation_worker_process(input_q, output_q, model_path, pca_model_path, hyp
                     logits = model(input_batch)
                     loss = criterion(logits, label_batch)
 
-                    if adaptation_ON and (loss < loss_threshold):
+                    if loss < loss_threshold: 
                         loss.backward()
                         optimizer.step()
-                        tloss += loss.item()
-                        num_batches += 1
+                    t_loss += loss.item()
+                    num_batches += 1
 
-                min_adaptation_count += 1
-            
-            avg_loss = tloss / num_batches if num_batches > 0 else 0
-            # print(f"avg loss: {avg_loss:.3f}")
-                    
+                avg_loss = t_loss / num_batches if num_batches > 0 else 0
+                print(f"Adaptation Worker: Training done. Average Loss: {avg_loss:.3f}")
+
             # After training, get the updated weights and send them back
             updated_weights = model.linear.weight.data.clone().cpu().numpy()
             updated_biases = model.linear.bias.data.clone().cpu().numpy()
-
-            # print(f"time taken for adaptation: {time.time() - start_time:.2f} seconds")
 
             output_q.put((side, input_data_reduced, grid_key, start_idx, updated_weights, updated_biases))
 
@@ -330,7 +321,7 @@ class OnlineAdaptator():
 
     def stop_worker(self):
         """Sends a shutdown signal to the worker process."""
-        self.input_q.put((None, None))
+        self.input_q.put((None, None, None, None, None, None))
         self.adaptation_process.join() # Wait for the process to finish
 
 class LoadData(Dataset):
@@ -343,7 +334,6 @@ class LoadData(Dataset):
         peak_indices = mid_peak_idx.tolist()
         peak_indices.insert(0, 0)  # Add start index
         peak_indices.append(self.input.shape[0])  # Add end index
-        print(f"{side}, inc: {incline}, spd: {speed}, HS idx: {peak_indices}")
 
         def gait_cycle_generator(peak_indices, num_cycles=None):
             # Create an array of all time indices

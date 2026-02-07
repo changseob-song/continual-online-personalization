@@ -9,8 +9,8 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting'
-    subject = 'Changseob'
-    condition = 'buffer'
+    subject = 'Changseob_PC'
+    condition = 'adapted'
     course_num = 1
     incline = 'LG'
 
@@ -19,9 +19,9 @@ if __name__ == '__main__':
     pulse_after_start = 10  # seconds
     trial_dur_sec = 255  # seconds
     adjustment_duration = 10  # seconds
-    exo_ON = True
+    exo_ON = False
     adaptation_ON = True
-    replay_buffer_ON = True
+    replay_buffer_ON = False
 
     # Trigger setting
     trigger_type = "mocap"  # "mocap" or "typing"
@@ -39,7 +39,7 @@ if __name__ == '__main__':
     # torque profile path
     torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/torque_splines.pkl'
     # PCA model path
-    pca_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/pca_model_mtr.pkl'
+    pca_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/pca_model_1gc_3_20.pkl'
     
     # Initialize Control loop class
     controller = Controller(pt_model_path, trt_engine_path, linear_layer_path, torque_profile_path, pca_model_path,

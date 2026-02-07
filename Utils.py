@@ -220,8 +220,14 @@ def gait_phase_inference_worker(input_q, output_q, trt_engine_path,
 def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None, incline_values=None, speed_values=None):
 
     # Convert lists to NumPy arrays
-    data_np = {k: np.array(v) for k, v in data_to_save.items()}
-
+    data_np = {}
+    for k, v in data_to_save.items():
+        try:
+            data_np[k] = np.array(v)
+        except ValueError:
+            print(f"Warning: Key '{k}' has inhomogeneous shape and cannot be converted to a standard array. Saving as object array.")
+            data_np[k] = np.array(v, dtype=object)
+            
     # Determine the number of samples to save
     min_len = min(v.shape[0] for v in data_np.values())
     start_idx = int(pulse_after_start * 100)
