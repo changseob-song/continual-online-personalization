@@ -214,7 +214,7 @@ class Controller:
             imu_R_reflected[1] *= -1; imu_R_reflected[3] *= -1; imu_R_reflected[5] *= -1
 
             # 4. Prepare the model input data
-            left_data, right_data = np.array([mtr_pos_L, mtr_vel_L, mtr_pos_R, mtr_vel_R]), np.array([mtr_pos_R, mtr_vel_R, mtr_pos_L, mtr_vel_L])
+            left_data, right_data = np.array([mtr_pos_L, mtr_pos_R]), np.array([mtr_pos_R, mtr_pos_L])
             # left_data, right_data = np.concatenate([imu_L_reflected, imu_R_reflected]), np.concatenate([imu_R, imu_L])
 
             left_data_norm, right_data_norm = (left_data - self.input_mean) / self.input_std, (right_data - self.input_mean) / self.input_std

@@ -19,9 +19,9 @@ if __name__ == '__main__':
     pulse_after_start = 10  # seconds
     trial_dur_sec = 255  # seconds
     adjustment_duration = 10  # seconds
-    exo_ON = False
+    exo_ON = True
     adaptation_ON = True
-    replay_buffer_ON = False
+    replay_buffer_ON = True
 
     # Trigger setting
     trigger_type = "mocap"  # "mocap" or "typing"
@@ -31,15 +31,15 @@ if __name__ == '__main__':
 
     # Model path
     # tcn_only
-    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/motor_bilateral_pos_vel/motor_bilateral_pos_vel.trt'
+    trt_engine_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/motor_bilateral_pos/motor_bilateral_pos.trt'
     # entire model (TCN + linear layer)
-    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/motor_bilateral_pos_vel/motor_bilateral_pos_vel.pt'
+    pt_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/trained_model/motor_bilateral_pos/motor_bilateral_pos.pt'
     # Linear layer numpy file
     linear_layer_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/linear_layer_weights_biases.pkl'
     # torque profile path
     torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/torque_splines.pkl'
     # PCA model path
-    pca_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/pca_model_1gc_3_20.pkl'
+    pca_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/pca_model_pos_1gc_2_50.pkl'
     
     # Initialize Control loop class
     controller = Controller(pt_model_path, trt_engine_path, linear_layer_path, torque_profile_path, pca_model_path,

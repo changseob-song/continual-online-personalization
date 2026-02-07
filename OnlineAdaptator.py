@@ -90,20 +90,29 @@ def rmse_monitoring(model, full_loader, device):
 
 def pca_transform_reconstruction(input_data, mid_peak_idx, pca_matrix, pca_mean, pca_scale):
     # Prepare the pca input
-    mid_peak_idx = int(mid_peak_idx[0])
+    if isinstance(mid_peak_idx, (np.ndarray, list)):
+        mid_peak_idx = int(mid_peak_idx[0])
+    
     input_length_1 = mid_peak_idx
     input_length_2 = input_data.shape[0] - mid_peak_idx # input data shape : (length, channel num)
 
-    input_data_resampled_1 = upsampling_2d(input_data[:mid_peak_idx, :], 20)  # output data shape: (100, channel num)
-    input_data_resampled_2 = upsampling_2d(input_data[mid_peak_idx:, :], 20)  # output data shape: (100, channel num)
-    input_data_scaled_1 = (np.r_[input_data_resampled_1.flatten(), input_length_1] - pca_mean) / pca_scale # shape: (401,)
-    input_data_scaled_2 = (np.r_[input_data_resampled_2.flatten(),input_length_2] - pca_mean) / pca_scale # shape: (401,)
-    input_data_reduced_1 = np.dot(input_data_scaled_1, pca_matrix)  # shape: (3,)
-    input_data_reduced_2 = np.dot(input_data_scaled_2, pca_matrix)  # shape: (3,)
+    input_data_resampled_1 = upsampling_2d(input_data[:mid_peak_idx, :], 50)  # output data shape: (100, channel num)
+    input_data_resampled_2 = upsampling_2d(input_data[mid_peak_idx:, :], 50)  # output data shape: (100, channel num)
+    input_data_scaled_1 = (input_data_resampled_1.flatten() - pca_mean) / pca_scale # shape: (100,)
+    input_data_scaled_2 = (input_data_resampled_2.flatten() - pca_mean) / pca_scale # shape: (100,)
+    
+    # Calculate PCA scores explicitly (without length appended)
+    pca_scores_1 = np.dot(input_data_scaled_1, pca_matrix)
+    pca_scores_2 = np.dot(input_data_scaled_2, pca_matrix)
+    
+    # Create the reduced vector for grid key (with length)
+    input_data_reduced_1 = np.r_[pca_scores_1, input_length_1]
+    input_data_reduced_2 = np.r_[pca_scores_2, input_length_2]
 
-    # Reconstruct example data
-    input_data_reconstructed_scaled_1 = np.dot(input_data_reduced_1, pca_matrix.T)
-    input_data_reconstructed_scaled_2 = np.dot(input_data_reduced_2, pca_matrix.T)
+    # Reconstruct example data using ONLY the PCA scores
+    input_data_reconstructed_scaled_1 = np.dot(pca_scores_1, pca_matrix.T)
+    input_data_reconstructed_scaled_2 = np.dot(pca_scores_2, pca_matrix.T)
+    
     input_data_reconstructed_1 = input_data_reconstructed_scaled_1 * pca_scale + pca_mean
     input_data_reconstructed_2 = input_data_reconstructed_scaled_2 * pca_scale + pca_mean
 
@@ -129,8 +138,8 @@ def adaptation_worker_process(input_q, output_q, model_path, pca_model_path, hyp
 
     with open(pca_model_path, 'rb') as f:
         pca_file = NumpyCompatUnpickler(f).load()
-        print(f"Adaptation Worker: PCA model loaded. Keys: {pca_file.keys()}")
-    pca_matrix = pca_file['pca_matrix']  # shape: (original_dim, reduced_dim)
+    pca_matrix = pca_file['pca_matrix']  # shape: (original_dim, reduced_dim))
+    print(f"Adaptation Worker: PCA model loaded. Matrix shape: {pca_matrix.shape}")
     pca_mean = pca_file['scaler_mean']      # shape: (original_dim,)
     pca_scale = pca_file['scaler_scale']    # shape: (original_dim,)
 
@@ -168,6 +177,7 @@ def adaptation_worker_process(input_q, output_q, model_path, pca_model_path, hyp
     loss_threshold = 1.0 # Loss threshold to accept a training step
     replay_threshold = 3.0 # RMSE threshold (%) to include a bin in the replay buffer
     grid_resolution = 2
+    cadence_resolution = 5
 
     # Main loop to wait for data and fine-tune
     while True:
@@ -203,7 +213,10 @@ def adaptation_worker_process(input_q, output_q, model_path, pca_model_path, hyp
                 train_loader_current_task = DataLoader(subset, batch_size=16, shuffle=True, num_workers=0, pin_memory=True) # Use num_workers=0 to avoid potential multiprocessing issues within a multiprocessing worker
 
                 # 4. Get the coordinate of the reduced input data in replay buffer grid
-                grid_key = tuple((input_data_reduced // grid_resolution).astype(int))
+                
+                spatial = (input_data_reduced[:2] // grid_resolution).astype(int)   # PC parts (indices 0 and 1)
+                temporal = int(input_data_reduced[2] // cadence_resolution)     # Temporal part (index 2) - cast to int explicitly
+                grid_key = tuple(spatial) + (temporal,)                
                 print("Grid key: ", grid_key, "Input reduced: ", input_data_reduced)
 
                 if min_adaptation_count >= min_adaptation_before_replay:
