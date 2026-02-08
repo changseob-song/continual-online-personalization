@@ -146,9 +146,12 @@ class Controller:
             'mtr_cmd_L': np.zeros(max_samples), 'mtr_cmd_R': np.zeros(max_samples),
             'gait_phase_L': np.zeros(max_samples), 'gait_phase_R': np.zeros(max_samples),
             'incline': ['']*max_samples, 'speed': ['']*max_samples,
-            'input_reduced_R': ['']*max_samples, 'input_reduced_L': ['']*max_samples,
-            'grid_key_R': ['']*max_samples, 'grid_key_L': ['']*max_samples,
             'gpio_output': np.zeros(max_samples)  # GPIO output state
+        }
+        self.data_to_save_adaptator = {
+            'update_start_idx_L': [], 'update_start_idx_R': [],
+            'input_reduced_R': [], 'input_reduced_L': [],
+            'grid_key_R': [], 'grid_key_L': [], 'replayed_bins_R': [], 'replayed_bins_L': [],
         }
 
         # Create local references to data arrays for faster access
@@ -160,10 +163,12 @@ class Controller:
         log_mtr_cmd_L, log_mtr_cmd_R = self.data_to_save['mtr_cmd_L'], self.data_to_save['mtr_cmd_R']
         log_gait_phase_L, log_gait_phase_R = self.data_to_save['gait_phase_L'], self.data_to_save['gait_phase_R']
         log_incline = self.data_to_save['incline']; log_speed = self.data_to_save['speed']
-
-        log_input_reduced_L = self.data_to_save['input_reduced_L']; log_input_reduced_R = self.data_to_save['input_reduced_R']
-        log_grid_key_L = self.data_to_save['grid_key_L']; log_grid_key_R = self.data_to_save['grid_key_R']
         log_gpio_output = self.data_to_save['gpio_output']
+
+        log_start_idx_L = self.data_to_save_adaptator['update_start_idx_L']; log_start_idx_R = self.data_to_save_adaptator['update_start_idx_R']
+        log_input_reduced_L = self.data_to_save_adaptator['input_reduced_L']; log_input_reduced_R = self.data_to_save_adaptator['input_reduced_R']
+        log_grid_key_L = self.data_to_save_adaptator['grid_key_L']; log_grid_key_R = self.data_to_save_adaptator['grid_key_R']
+        log_replayed_bins_L = self.data_to_save_adaptator['replayed_bins_L']; log_replayed_bins_R = self.data_to_save_adaptator['replayed_bins_R']
 
         # Start recording time
         first_pulse_sent = False
@@ -257,7 +262,7 @@ class Controller:
                         start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
                         input_stream_data_L = input_stream_data[0, :, start_idx_rel:end_idx_rel]
 
-                        self.online_adaptator.trigger_finetuning('L', current_incline, current_speed, input_stream_data_L.T.copy(), mid_peak_idx_rel, loop_index)
+                        self.online_adaptator.trigger_finetuning('L', current_incline, current_speed, input_stream_data_L.T.copy(), mid_peak_idx_rel, start_idx_abs)
 
                         # Update the last used peak to the end of the current window
                         self.last_used_peak_idx_L = end_idx_abs
@@ -274,7 +279,7 @@ class Controller:
                         start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
                         input_stream_data_R = input_stream_data[1, :, start_idx_rel:end_idx_rel]
 
-                        self.online_adaptator.trigger_finetuning('R', current_incline, current_speed, input_stream_data_R.T.copy(), mid_peak_idx_rel, loop_index)
+                        self.online_adaptator.trigger_finetuning('R', current_incline, current_speed, input_stream_data_R.T.copy(), mid_peak_idx_rel, start_idx_abs)
 
                         # Update the last used peak to the end of the current window
                         self.last_used_peak_idx_R = end_idx_abs
@@ -282,14 +287,16 @@ class Controller:
             # Check for new weights from the adaptation worker
             updated_params = self.online_adaptator.get_updated_weights()
             if updated_params:
-                side, input_reduced, grid_key, start_index, weights, biases = updated_params
+                side, start_index, input_reduced, grid_key, replayed_bins, weights, biases = updated_params
                 if side == 'R':
                     self.linear_weights_R = weights;    self.linear_biases_R = biases
-                    start_idx_R = start_index;      log_input_reduced_R[loop_index] = input_reduced; log_grid_key_R[loop_index] = grid_key
+                    start_idx_R = start_index;  log_start_idx_R.append(start_index)
+                    log_input_reduced_R.append(input_reduced); log_grid_key_R.append(grid_key); log_replayed_bins_R.append(replayed_bins)
                     update_latency_R = (loop_index - start_index) / self.Exo.control_freq_Hz
                 elif side == 'L':
                     self.linear_weights_L = weights;    self.linear_biases_L = biases
-                    start_idx_L = start_index;      log_input_reduced_L[loop_index] = input_reduced; log_grid_key_L[loop_index] = grid_key
+                    start_idx_L = start_index;   log_start_idx_L.append(start_index)
+                    log_input_reduced_L.append(input_reduced); log_grid_key_L.append(grid_key); log_replayed_bins_L.append(replayed_bins)
                     update_latency_L = (loop_index - start_index) / self.Exo.control_freq_Hz
 
             # 5. TensorRT inference & Apply linear layer weights and biases
@@ -427,7 +434,7 @@ class Controller:
         self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_L, 0)
         self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, 0)
 
-        save_data(self.data_to_save, self.trial_name, self.pulse_after_start, self.trial_dur_sec)
+        save_data(self.data_to_save, self.data_to_save_adaptator, self.trial_name, self.pulse_after_start, self.trial_dur_sec)
         save_weights_biases(self.linear_weights_L, self.linear_biases_L, self.linear_weights_R, self.linear_biases_R, self.linear_layer_path)
         cleanup_can(self.Exo.bus, self.Exo.notifier)
         self.GPIO_control.safe_gpio_cleanup()

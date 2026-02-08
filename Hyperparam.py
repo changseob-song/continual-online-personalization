@@ -38,7 +38,7 @@ hyperparam_config = {
     'num_channels': [80, 80, 80, 80, 80],
     'kernel_size': 5,
     'dropout': 0.05,
-    'init_lr': 1e-4,
+    'init_lr': 5e-5,
     'batch_size': 16,
 
     'number_of_workers': 10,

@@ -10,7 +10,7 @@ if __name__ == '__main__':
 
     # Trial setting'
     subject = 'Changseob_PC'
-    condition = 'adapted'
+    condition = 'test'
     course_num = 1
     incline = 'LG'
 

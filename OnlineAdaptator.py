@@ -139,7 +139,6 @@ def adaptation_worker_process(input_q, output_q, model_path, pca_model_path, hyp
     with open(pca_model_path, 'rb') as f:
         pca_file = NumpyCompatUnpickler(f).load()
     pca_matrix = pca_file['pca_matrix']  # shape: (original_dim, reduced_dim))
-    print(f"Adaptation Worker: PCA model loaded. Matrix shape: {pca_matrix.shape}")
     pca_mean = pca_file['scaler_mean']      # shape: (original_dim,)
     pca_scale = pca_file['scaler_scale']    # shape: (original_dim,)
 
@@ -216,7 +215,7 @@ def adaptation_worker_process(input_q, output_q, model_path, pca_model_path, hyp
                 
                 spatial = (input_data_reduced[:2] // grid_resolution).astype(int)   # PC parts (indices 0 and 1)
                 temporal = int(input_data_reduced[2] // cadence_resolution)     # Temporal part (index 2) - cast to int explicitly
-                grid_key = tuple(spatial) + (temporal,)                
+                grid_key = tuple(spatial.tolist()) + (temporal,)
                 print("Grid key: ", grid_key, "Input reduced: ", input_data_reduced)
 
                 if min_adaptation_count >= min_adaptation_before_replay:
@@ -304,7 +303,7 @@ def adaptation_worker_process(input_q, output_q, model_path, pca_model_path, hyp
 
             # print(f"time taken for adaptation: {time.time() - start_time:.2f} seconds")
 
-            output_q.put((side, input_data_reduced, grid_key, start_idx, updated_weights, updated_biases))
+            output_q.put((side, start_idx, input_data_reduced, grid_key, bins_for_replay, updated_weights, updated_biases))
 
         except Exception as e:
             print(f"Adaptation worker error: {e}")

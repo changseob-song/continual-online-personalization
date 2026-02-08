@@ -217,26 +217,26 @@ def gait_phase_inference_worker(input_q, output_q, trt_engine_path,
     print("Gait Phase Worker: Exited.")
 
 # Function to save all collected dataif 
-def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None, incline_values=None, speed_values=None):
+def save_data(data_to_save_controller, data_to_save_adaptator, trial_name, pulse_after_start=0, trial_dur_sec=None, incline_values=None, speed_values=None):
 
     # Convert lists to NumPy arrays
-    data_np = {}
-    for k, v in data_to_save.items():
+    data_np_controller = {}
+    for k, v in data_to_save_controller.items():
         try:
-            data_np[k] = np.array(v)
+            data_np_controller[k] = np.array(v)
         except ValueError:
             print(f"Warning: Key '{k}' has inhomogeneous shape and cannot be converted to a standard array. Saving as object array.")
-            data_np[k] = np.array(v, dtype=object)
+            data_np_controller[k] = np.array(v, dtype=object)
             
     # Determine the number of samples to save
-    min_len = min(v.shape[0] for v in data_np.values())
+    min_len = min(v.shape[0] for v in data_np_controller.values())
     start_idx = int(pulse_after_start * 100)
     end_idx = min(min_len, int((pulse_after_start + trial_dur_sec) * 100)) if trial_dur_sec else min_len
 
     print(f'Slicing data from index {start_idx} to {end_idx}.')
 
     # Slice all data arrays
-    sliced_data = {k: v[start_idx:end_idx] for k, v in data_np.items()}
+    sliced_data = {k: v[start_idx:end_idx] for k, v in data_np_controller.items()}
 
     # Define data for motor CSV
     motor_cols = ['timestamp', 'mtr_pos_L', 'mtr_pos_R', 'mtr_vel_L', 'mtr_vel_R', 'GRF_L', 'GRF_R', 'gpio_output']
@@ -264,16 +264,47 @@ def save_data(data_to_save, trial_name, pulse_after_start=0, trial_dur_sec=None,
                    'gpio_output']
     save_dataframe(f'{trial_name}-output_torque.csv', sliced_data, torque_cols)
 
-    # Save input_reduced and grid_key data
-    pc_data = {'timestamp': sliced_data['timestamp']}
-    for side in ['L', 'R']:
-        pc_data[f'input_reduced_{side}'] = sliced_data[f'input_reduced_{side}']
-        pc_data[f'grid_key_{side}'] = sliced_data[f'grid_key_{side}']
+    data_to_save_adaptator_np = {}
+    for k, v in data_to_save_adaptator.items():
+        try:
+            data_to_save_adaptator_np[k] = np.array(v)
+        except ValueError:
+            print(f"Warning: Key '{k}' has inhomogeneous shape. Saving as object array.")
+            data_to_save_adaptator_np[k] = np.array(v, dtype=object)
+
+    sliced_data_adaptator = {k: v for k, v in data_to_save_adaptator_np.items()}
+
+    # --- THE FIX ---
+    # Convert ALL complex columns to lists. 
+    # This prevents 'homogeneous' data from becoming 2D numpy matrices.
+    input_reduced_L_fixed = list(sliced_data_adaptator['input_reduced_L'])
+    input_reduced_R_fixed = list(sliced_data_adaptator['input_reduced_R'])
+    
+    # Also fix replayed_bins
+    replayed_bins_L_fixed = list(sliced_data_adaptator['replayed_bins_L'])
+    replayed_bins_R_fixed = list(sliced_data_adaptator['replayed_bins_R'])
+    
+    # Grid keys are safer as tuples
+    grid_key_L_fixed = [tuple(x) for x in sliced_data_adaptator['grid_key_L']]
+    grid_key_R_fixed = [tuple(x) for x in sliced_data_adaptator['grid_key_R']]
+        
+    # Construct the dictionary with the FIXED lists
+    pc_data = {
+        'update_start_idx_L': sliced_data_adaptator['update_start_idx_L'], 
+        'update_start_idx_R': sliced_data_adaptator['update_start_idx_R'],
+        'input_reduced_L': input_reduced_L_fixed, 
+        'input_reduced_R': input_reduced_R_fixed,
+        'grid_key_L': grid_key_L_fixed, 
+        'grid_key_R': grid_key_R_fixed,
+        'replayed_bins_L': replayed_bins_L_fixed,  # Use the fixed version
+        'replayed_bins_R': replayed_bins_R_fixed   # Use the fixed version
+    }
+
+    # Verify shapes before creation (Optional debugging)
+    # for k, v in pc_data.items():
+    #     print(f"{k}: {type(v)}")
 
     df_pc = pd.DataFrame(pc_data)
-    # Drop rows where all columns (except 'timestamp') are NaN
-    value_cols = [col for col in df_pc.columns if col != 'timestamp']
-    df_pc.dropna(subset=value_cols, how='all', inplace=True)
 
     df_pc.to_csv(f'{trial_name}-pc.csv', index=False)
     print(f'Data saved to {trial_name}-pc.csv. Dimensions: {df_pc.shape}')
