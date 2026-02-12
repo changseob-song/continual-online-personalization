@@ -12,14 +12,16 @@ from Exo import Exo
 from scipy.signal import find_peaks
 
 class Controller:
-    def __init__(self, pt_model_path, trt_engine_path, linear_layer_path, torque_profile_path, pca_model_path,
+    def __init__(self, pt_model_path, trt_engine_path, torque_profile_path, pca_model_path,
+                 linear_layer_path, buffer_file_path,
                  trigger_type, trial_name, course_num, incline, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
                  adaptation_ON=False, replay_buffer_ON=False):
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
-        self.linear_layer_path = linear_layer_path
         self.trt_engine_path = trt_engine_path
         self.pca_model_path = pca_model_path
+        self.linear_layer_path = linear_layer_path
+        self.buffer_file_path = buffer_file_path
         self.trigger_type = trigger_type
         self.trial_name = trial_name
         self.course_num = course_num
@@ -88,8 +90,10 @@ class Controller:
             self.linear_weights_L = linear_params['weights_L'].astype(np.float32)
             self.linear_biases_L = linear_params['biases_L'].astype(np.float32)
 
+
         # Initialize OnlineAdaptator
-        self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.pca_model_path, self.adaptation_ON, self.replay_buffer_ON)
+        self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.pca_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path,
+                                                self.adaptation_ON, self.replay_buffer_ON)
 
         self.incline_values = [-10, -5, 0, 5, 10]
         self.incline_keys = {'RD_10': -10, 'RD_5': -5, 'LG': 0, 'RA_5': 5, 'RA_10': 10}
@@ -436,6 +440,7 @@ class Controller:
 
         save_data(self.data_to_save, self.data_to_save_adaptator, self.trial_name, self.pulse_after_start, self.trial_dur_sec)
         save_weights_biases(self.linear_weights_L, self.linear_biases_L, self.linear_weights_R, self.linear_biases_R, self.linear_layer_path)
+        self.online_adaptator.stop_worker()
         cleanup_can(self.Exo.bus, self.Exo.notifier)
         self.GPIO_control.safe_gpio_cleanup()
 

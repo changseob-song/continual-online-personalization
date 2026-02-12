@@ -289,25 +289,31 @@ def save_data(data_to_save_controller, data_to_save_adaptator, trial_name, pulse
     grid_key_R_fixed = [tuple(x) for x in sliced_data_adaptator['grid_key_R']]
         
     # Construct the dictionary with the FIXED lists
-    pc_data = {
-        'update_start_idx_L': sliced_data_adaptator['update_start_idx_L'], 
+    pc_data_R = {
         'update_start_idx_R': sliced_data_adaptator['update_start_idx_R'],
-        'input_reduced_L': input_reduced_L_fixed, 
         'input_reduced_R': input_reduced_R_fixed,
-        'grid_key_L': grid_key_L_fixed, 
         'grid_key_R': grid_key_R_fixed,
-        'replayed_bins_L': replayed_bins_L_fixed,  # Use the fixed version
         'replayed_bins_R': replayed_bins_R_fixed   # Use the fixed version
+    }
+
+    pc_data_L = {
+        'update_start_idx_L': sliced_data_adaptator['update_start_idx_L'],
+        'input_reduced_L': input_reduced_L_fixed,
+        'grid_key_L': grid_key_L_fixed,
+        'replayed_bins_L': replayed_bins_L_fixed   # Use the fixed version
     }
 
     # Verify shapes before creation (Optional debugging)
     # for k, v in pc_data.items():
     #     print(f"{k}: {type(v)}")
 
-    df_pc = pd.DataFrame(pc_data)
+    df_pc_R = pd.DataFrame(pc_data_R)
+    df_pc_L = pd.DataFrame(pc_data_L)
 
-    df_pc.to_csv(f'{trial_name}-pc.csv', index=False)
-    print(f'Data saved to {trial_name}-pc.csv. Dimensions: {df_pc.shape}')
+    df_pc_R.to_csv(f'{trial_name}-pc_R.csv', index=False)
+    print(f'Data saved to {trial_name}-pc_R.csv. Dimensions: {df_pc_R.shape}')
+    df_pc_L.to_csv(f'{trial_name}-pc_L.csv', index=False)
+    print(f'Data saved to {trial_name}-pc_L.csv. Dimensions: {df_pc_L.shape}')
 
 # Function to save linear layer weights and biases
 def save_weights_biases(linear_weights_L, linear_biases_L, linear_weights_R, linear_biases_R, linear_layer_path):
