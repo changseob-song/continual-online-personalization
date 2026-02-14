@@ -112,7 +112,6 @@ class Controller:
     def run_loop(self, Exo_ON=False):
 
         # Setting for the exiting process
-        atexit.register(lambda: (cleanup_can(self.Exo.bus, self.Exo.notifier), self.GPIO_control.safe_gpio_cleanup()))
         signal.signal(signal.SIGINT, self.exit_signal_handler)
 
         # Rolling array initialization of model output array (2xframe_length)
@@ -323,7 +322,6 @@ class Controller:
             model_output_l_denorm = model_output_l_val * self.label_std + self.label_mean
             model_output_r_denorm = model_output_r_val * self.label_std + self.label_mean
             gait_phase_L, gait_phase_R = cartesian_to_percentage(model_output_l_denorm), cartesian_to_percentage(model_output_r_denorm)
-            gait_phase_L_, gait_phase_R_ = gait_phase_L, gait_phase_R # store the non-filtered version for the logic below
 
             # Store previous gait phase if decreasing 
             if (3 < gait_phase_L_prev < 93) and (gait_phase_L < gait_phase_L_prev): gait_phase_L = gait_phase_L_prev # handle the case that decreases suddenly
@@ -388,6 +386,8 @@ class Controller:
             if second_pulse_sent and second_pulse_end_time and current_time >= second_pulse_end_time:
                 self.GPIO_control.send_gpio_pulse_end()
                 second_pulse_end_time = None
+                print("Press ctrl + c in 10 seconds !")
+                time.sleep(10)
                 break # Exit the loop after the second pulse ends
 
             # GPIO output logging
@@ -400,16 +400,10 @@ class Controller:
             telemetry_data = {
                 "pos_L": mtr_pos_L,
                 "pos_R": mtr_pos_R,
-                "vel_L": mtr_vel_L,
-                "vel_R": mtr_vel_R,
-                # "gyroY_L": imu_L[4],
-                # "gyroY_R": imu_R[4],
                 "GRF_L": GRF_L,
                 "GRF_R": GRF_R,
                 "gait_phase_L": gait_phase_L,
                 "gait_phase_R": gait_phase_R,
-                "gait_phase_L_": gait_phase_L_,
-                "gait_phase_R_": gait_phase_R_,
                 "cmd_L": motor_cmd_val_L,
                 "cmd_R": motor_cmd_val_R,
                 "incline": current_incline,

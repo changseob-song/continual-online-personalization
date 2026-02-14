@@ -11,15 +11,15 @@ if __name__ == '__main__':
     # Trial setting'
     subject = 'Changseob_PC'
     condition = 'pilot'
-    course_num = 2
-    incline = 'RA_5'
+    course_num = 3
+    incline = 'RD_5'
 
     trial_name = f'{subject}-{condition}-{course_num}_{incline}'
 
     pulse_after_start = 10  # seconds
     trial_dur_sec = 95  # seconds
     adjustment_duration = 10  # seconds
-    exo_ON = True
+    exo_ON = False
     adaptation_ON = True
     replay_buffer_ON = True
 
@@ -42,7 +42,7 @@ if __name__ == '__main__':
     # Linear layer numpy file
     linear_layer_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/linear_layer_weights_biases.pkl'
     # Buffer file
-    buffer_file_path = f'/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/buffer.pkl'
+    buffer_file_path = f'/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/buffer_{course_num-1}.pkl'
     
     # Initialize Control loop class
     controller = Controller(pt_model_path, trt_engine_path, torque_profile_path, pca_model_path,

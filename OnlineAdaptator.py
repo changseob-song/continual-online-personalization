@@ -134,22 +134,26 @@ class OnlineAdaptator():
 
     def stop_worker(self):
         """Sends a shutdown signal to the worker process."""
-        self.input_q.put((None, None, None, None, None, None))
+        self.input_q.put((None, None, None, None, None, None))  # Send shutdown signal
 
-        self.adaptation_process.join(timeout=5)
+        self.adaptation_process.join(timeout=1)
         if self.adaptation_process.is_alive():
             self.adaptation_process.terminate()
             self.adaptation_process.join()
     
     def save_buffer_to_file(self):
-        print("Adaptation Worker shut down. Saving the buffer data to file...")
-        # Save the buffer data to file
-        with open(self.buffer_file_path, "wb") as f:
-            pickle.dump({
-            'bin_grid': self.bin_grid,
-            'bin_data': self.bin_data,
-            'bin_mid_idx': self.bin_mid_idx,
-            }, f)
+        try:
+            # Save the buffer data to file
+            buffer_file_name = self.buffer_file_path[:-5] + str(self.course_num) + '.pkl'
+            with open(buffer_file_name, "wb") as f:
+                pickle.dump({
+                'bin_grid': self.bin_grid,
+                'bin_data': self.bin_data,
+                'bin_mid_idx': self.bin_mid_idx,
+                }, f)
+            print(f"Buffer saved to {buffer_file_name}... Bin_size: L {len(self.bin_grid['L'])}, R {len(self.bin_grid['R'])}, ", flush=True)
+        except Exception as e:
+            print(f"Error saving buffer data: {e}", flush=True)
 
 
     def adaptation_worker_warmup(self, model, optimizer, criterion, device, model_path, input_mean, input_std, label_mean, label_std):
@@ -254,9 +258,6 @@ class OnlineAdaptator():
             print("Adaptation Worker: Loader reconstruction complete. Sizes - L: {}, R: {}".format(len(self.bin_loader['L']), len(self.bin_loader['R'])))
 
         optimizer_L = torch.optim.Adam(model_L.linear.parameters(), lr=hyperparam_config['init_lr'])
-# ...existing code...
-
-        optimizer_L = torch.optim.Adam(model_L.linear.parameters(), lr=hyperparam_config['init_lr'])
         optimizer_R = torch.optim.Adam(model_R.linear.parameters(), lr=hyperparam_config['init_lr'])
         criterion = torch.nn.MSELoss()
 
@@ -280,18 +281,18 @@ class OnlineAdaptator():
         while True:
             try:
                 # Wait for data from the main controller
-                message = input_q.get() # input data shape : (length, channel num)
+                msg  = input_q.get() # input data shape : (length, channel num)
 
-                if message[0] is None:  # Check for shutdown signal
-                    print("Adaptation Worker: Shutdown signal received.")
+                if msg[0] is None:  # Check for shutdown signal
+                    print("Adaptation Worker: Shutdown signal received. Saving buffer and exiting...")
                     self.save_buffer_to_file()
                     break
 
                 start_time = time.time()
 
-                side, incline, speed, input_data, mid_peak_idx, start_idx = message
-
                 # Determine either left or right side
+                side, incline, speed, input_data, mid_peak_idx, start_idx  = msg
+
                 model = model_R if side == 'R' else model_L
                 optimizer = optimizer_R if side == 'R' else optimizer_L
 
