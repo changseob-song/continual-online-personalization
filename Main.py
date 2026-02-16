@@ -9,9 +9,9 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting'
-    subject = 'Changseob_PC'
-    condition = 'pilot'
-    course_num = 3
+    subject = 'SK_Changseob'
+    condition = 'PC_buffer'
+    course_num = 6
     incline = 'RD_5'
 
     trial_name = f'{subject}-{condition}-{course_num}_{incline}'
@@ -19,9 +19,10 @@ if __name__ == '__main__':
     pulse_after_start = 10  # seconds
     trial_dur_sec = 95  # seconds
     adjustment_duration = 10  # seconds
-    exo_ON = False
+    exo_ON = True
     adaptation_ON = True
     replay_buffer_ON = True
+    PC_USE = True
 
     # Trigger setting
     trigger_type = "mocap"  # "mocap" or "typing"
@@ -50,7 +51,7 @@ if __name__ == '__main__':
                             trigger_type, trial_name, course_num, incline,
                             pulse_after_start, trial_dur_sec, adjustment_duration,
                             body_mass_kg,
-                            adaptation_ON, replay_buffer_ON
+                            adaptation_ON, replay_buffer_ON, PC_USE
                             )
 
     mp.set_start_method('spawn', force=True)

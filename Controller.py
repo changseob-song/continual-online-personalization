@@ -3,7 +3,8 @@ import multiprocessing as mp
 import numpy as np
 import pandas as pd
 
-from OnlineAdaptator import OnlineAdaptator
+from OnlineAdaptator_PC import OnlineAdaptator_PC
+from OnlineAdaptator_task import OnlineAdaptator_task
 from Utils_Mocap_Datastream import Mocap_trigger
 from Utils_GPIO import GPIO_control
 from Utils_Teleplot import Teleplot
@@ -15,7 +16,7 @@ class Controller:
     def __init__(self, pt_model_path, trt_engine_path, torque_profile_path, pca_model_path,
                  linear_layer_path, buffer_file_path,
                  trigger_type, trial_name, course_num, incline, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
-                 adaptation_ON=False, replay_buffer_ON=False):
+                 adaptation_ON=False, replay_buffer_ON=False, PC_USE=False):
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
         self.trt_engine_path = trt_engine_path
@@ -32,6 +33,7 @@ class Controller:
         self.adjustment_duration = adjustment_duration
         self.adaptation_ON = adaptation_ON
         self.replay_buffer_ON = replay_buffer_ON
+        self.PC_USE = PC_USE
         self.last_used_peak_idx_L = 0
         self.last_used_peak_idx_R = 0
 
@@ -92,10 +94,13 @@ class Controller:
 
 
         # Initialize OnlineAdaptator
-        self.online_adaptator = OnlineAdaptator(self.pt_model_path, self.pca_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path,
+        if PC_USE:
+            self.online_adaptator = OnlineAdaptator_PC(self.pt_model_path, self.pca_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path,
+                                                self.adaptation_ON, self.replay_buffer_ON)
+        else:
+            self.online_adaptator = OnlineAdaptator_task(self.pt_model_path, self.pca_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path,
                                                 self.adaptation_ON, self.replay_buffer_ON)
 
-        self.incline_values = [-10, -5, 0, 5, 10]
         self.incline_keys = {'RD_10': -10, 'RD_5': -5, 'LG': 0, 'RA_5': 5, 'RA_10': 10}
 
     def detect_heel_strike(self, GRF_data, threshold, min_interval):
@@ -212,7 +217,6 @@ class Controller:
 
             # 2.1 Read the GRF values
             GRF_L, GRF_R, current_speed = self.mocap_trigger.get_GRF()
-            # GRF_L, GRF_R, current_speed = 0, 0, 0.6
             log_GRF_L[loop_index] = GRF_L; log_GRF_R[loop_index] = GRF_R
             log_incline[loop_index] = current_incline; log_speed[loop_index] = current_speed
 
@@ -239,9 +243,9 @@ class Controller:
                 # --- REVISED ADAPTATION TRIGGER LOGIC ---
                 update_freq_gc = 2 # Number of gait cycles for each adaptation update
                 num_skipped_cycles = 1 # Number of initial cycles to skip after starting adaptation
+                search_window = 700 # Search in the last 7 seconds
 
                 # Optimized peak detection on recent data
-                search_window = 700 # Search in the last 5 seconds
                 search_start_idx = max(0, loop_index - search_window)
                 recent_GRF_L = self.data_to_save['GRF_L'][search_start_idx:loop_index]
                 recent_GRF_R = self.data_to_save['GRF_R'][search_start_idx:loop_index]

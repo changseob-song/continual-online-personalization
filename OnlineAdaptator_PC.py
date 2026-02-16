@@ -32,16 +32,6 @@ def upsampling_2d(data, target_length):
 
     return upsampled_data  # (target_length, n_features)
 
-def interpolate_two_cycles(cycle1, cycle2, weight):
-    # cycle1 and cycle2 shape: (n_samples, n_features)
-    if cycle2 is None:
-        return cycle1
-    interpolated_len = cycle1.shape[0]*weight + cycle2.shape[0]*(1-weight)
-    cycle1_upsampled = upsampling_2d(cycle1, int(interpolated_len))
-    cycle2_upsampled = upsampling_2d(cycle2, int(interpolated_len))
-    interpolated_cycle = cycle1_upsampled * weight + cycle2_upsampled * (1 - weight)
-    return interpolated_cycle
-
 def rmse_monitoring(model, full_loader, device):
     labels_gp, outputs_gp = [], []
     for inputs, labels in full_loader:
@@ -98,7 +88,7 @@ def pca_transform_reconstruction(input_data, mid_peak_idx, pca_matrix, pca_mean,
     return np.mean([input_data_reduced_1, input_data_reduced_2], axis=0) , np.mean([reconstruction_error_scaled_1, reconstruction_error_scaled_2])
 
 
-class OnlineAdaptator():
+class OnlineAdaptator_PC():
     def __init__(self, model_path, pca_model_path, course_num, linear_layer_path, buffer_file_path, adaptation_ON=False, replay_buffer_ON=False):
         self.model_path = model_path
         self.pca_model_path = pca_model_path
@@ -109,6 +99,7 @@ class OnlineAdaptator():
         self.output_q = mp.Queue()
         self.adaptation_ON = adaptation_ON
         self.replay_buffer_ON = replay_buffer_ON
+
         self.bin_grid = {side: [] for side in ['L', 'R']} 
         self.bin_data = {side: [] for side in ['L', 'R']}
         self.bin_mid_idx = {side: [] for side in ['L', 'R']}
@@ -207,8 +198,10 @@ class OnlineAdaptator():
         # 1. Initialize models inside the worker
         model_L = TCN(hyperparam_config).to(device)
         model_R = TCN(hyperparam_config).to(device)
+        model_dummy = TCN(hyperparam_config).to(device) # Dummy model for warm-up
         model_L.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
         model_R.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+        model_dummy.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
 
         # 2. Freeze layers and setup optimizers
         for model in [model_L, model_R]:
@@ -254,28 +247,32 @@ class OnlineAdaptator():
                         subset = Subset(dataset, train_indices)
                         loader = DataLoader(subset, batch_size=16, shuffle=True, num_workers=0, pin_memory=True)
                         self.bin_loader[side_loop].append(loader)
+                    print(f"Adaptation Worker: Reconstructed DataLoader for {side_loop} bin {i}, Dataset size: {len(dataset)}")
 
             print("Adaptation Worker: Loader reconstruction complete. Sizes - L: {}, R: {}".format(len(self.bin_loader['L']), len(self.bin_loader['R'])))
 
         optimizer_L = torch.optim.Adam(model_L.linear.parameters(), lr=hyperparam_config['init_lr'])
         optimizer_R = torch.optim.Adam(model_R.linear.parameters(), lr=hyperparam_config['init_lr'])
+        optimizer_dummy = torch.optim.Adam(model_dummy.linear.parameters(), lr=hyperparam_config['init_lr']) # Dummy optimizer for warm-up
         criterion = torch.nn.MSELoss()
 
         model_L.train()
         model_R.train()
+        model_dummy.train() # Dummy model for warm-up
 
-        self.adaptation_worker_warmup(model_R, optimizer_R, criterion, device, model_path, input_mean, input_std, label_mean, label_std)
+        self.adaptation_worker_warmup(model_dummy, optimizer_dummy, criterion, device, model_path, input_mean, input_std, label_mean, label_std)
 
         avg_loss = 0
         misdetection_flag = False
         
         min_adaptation_before_replay = 4 # Minimum number of adaptation steps before starting replay
         min_adaptation_count = 0
-        min_replay_num = 4 # Minimum number of bins to consider for replay
+        max_replay_num = 4 # Maximum number of bins to consider for replay
         loss_threshold = 1.0 # Loss threshold to accept a training step
         replay_threshold = 3.0 # RMSE threshold (%) to include a bin in the replay buffer
+
         grid_resolution = 2
-        cadence_resolution = 5
+        cadence_resolution = 10
 
         # Main loop to wait for data and fine-tune
         while True:
@@ -325,7 +322,9 @@ class OnlineAdaptator():
                     print("Grid key: ", grid_key, "Input reduced: ", input_data_reduced)
                     print("Current bin size: ", len(self.bin_grid[side]))
 
-                    if min_adaptation_count >= min_adaptation_before_replay:
+                    min_adaptation_passed = min_adaptation_count >= min_adaptation_before_replay
+                    if course_num > 1: min_adaptation_passed = True
+                    if min_adaptation_passed:                        
                         if grid_key not in self.bin_grid[side]: # New grid point
                             self.bin_grid[side].append(grid_key)
                             self.bin_data[side].append(input_data)
@@ -361,7 +360,7 @@ class OnlineAdaptator():
                 
                 # 7. Select top-k highest RMSE bins
                 bin_size = len(self.bin_grid[side])
-                k = min(min_replay_num, bin_size)  # Choose up to 4
+                k = min(max_replay_num, bin_size)  # Choose up to 4
                 top_k_bins = sorted(range(bin_size), key=lambda x: bin_rmse[x], reverse=True)[:k]
                 
                 # 8. Add bins to replay buffer only if their RMSE is above a threshold
@@ -402,9 +401,6 @@ class OnlineAdaptator():
                             num_batches += 1
 
                     min_adaptation_count += 1
-                
-                avg_loss = tloss / num_batches if num_batches > 0 else 0
-                # print(f"avg loss: {avg_loss:.3f}")
                         
                 # After training, get the updated weights and send them back
                 updated_weights = model.linear.weight.data.clone().cpu().numpy()
