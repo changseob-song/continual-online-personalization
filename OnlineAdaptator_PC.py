@@ -269,7 +269,7 @@ class OnlineAdaptator_PC():
         min_adaptation_count = 0
         max_replay_num = 4 # Maximum number of bins to consider for replay
         loss_threshold = 1.0 # Loss threshold to accept a training step
-        replay_threshold = 3.0 # RMSE threshold (%) to include a bin in the replay buffer
+        replay_threshold = 2.5 # RMSE threshold (%) to include a bin in the replay buffer
 
         grid_resolution = 2
         cadence_resolution = 10
@@ -295,7 +295,7 @@ class OnlineAdaptator_PC():
 
                 # 1. Go through PCA transformation
                 input_data_reduced, reconstruction_error_scaled = pca_transform_reconstruction(input_data, mid_peak_idx, pca_matrix, pca_mean, pca_scale)
-                # print(f"Adaptation Worker: PCA transformation done. Reconstruction error (scaled): {reconstruction_error_scaled:.2f}")
+                print(f"Adaptation Worker: PCA transformation done. Reconstruction error (scaled): {reconstruction_error_scaled:.2f}")
 
                 # 2. Check misdetection based on reconstruction error 
                 if reconstruction_error_scaled > 5.0:
@@ -369,7 +369,7 @@ class OnlineAdaptator_PC():
 
                 if replay_buffer_ON:
                     for bin_idx in top_k_bins:
-                        if bin_rmse[bin_idx] > replay_threshold:
+                        if (replay_threshold < bin_rmse[bin_idx] < 10):
                             train_loader_combined_list.append(self.bin_loader[side][bin_idx])
                             bins_for_replay.append(bin_idx)
                     print(f"Adaptation Worker: Replaying bins with RMSE > {replay_threshold}%: {bins_for_replay}")

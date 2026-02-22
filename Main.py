@@ -10,14 +10,14 @@ if __name__ == '__main__':
 
     # Trial setting'
     subject = 'SK_Changseob'
-    condition = 'PC_buffer'
-    course_num = 6
-    incline = 'RD_5'
+    condition = 'pc_buffer'
+    course_num = 4
+    incline = 'RA_5'
 
     trial_name = f'{subject}-{condition}-{course_num}_{incline}'
 
     pulse_after_start = 10  # seconds
-    trial_dur_sec = 95  # seconds
+    trial_dur_sec = 105  # seconds
     adjustment_duration = 10  # seconds
     exo_ON = True
     adaptation_ON = True

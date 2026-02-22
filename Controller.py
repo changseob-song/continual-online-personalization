@@ -132,6 +132,7 @@ class Controller:
 
         left_data, right_data = np.zeros(self.num_input_features), np.zeros(self.num_input_features)
         gait_phase_L_prev, gait_phase_R_prev = 0.0, 0.0
+        prev_speed = None
 
         last_model_output_r = np.zeros((80, 100), dtype=np.float32); last_model_output_l = np.zeros((80, 100), dtype=np.float32)
         model_output_r_val = last_model_output_r; model_output_l_val = last_model_output_l
@@ -217,6 +218,7 @@ class Controller:
 
             # 2.1 Read the GRF values
             GRF_L, GRF_R, current_speed = self.mocap_trigger.get_GRF()
+            if prev_speed is None: prev_speed = current_speed
             log_GRF_L[loop_index] = GRF_L; log_GRF_R[loop_index] = GRF_R
             log_incline[loop_index] = current_incline; log_speed[loop_index] = current_speed
 
@@ -227,7 +229,8 @@ class Controller:
 
             # 4. Prepare the model input data
             left_data, right_data = np.array([mtr_pos_L, mtr_pos_R]), np.array([mtr_pos_R, mtr_pos_L])
-            # left_data, right_data = np.concatenate([imu_L_reflected, imu_R_reflected]), np.concatenate([imu_R, imu_L])
+            # left_data, right_data = np.concatenate([imu_L, imu_R]), np.concatenate([imu_R, imu_L])
+            # left_data, right_data = np.array([imu_L[4], imu_R[4]]), np.array([imu_R[4], imu_L[4]])
 
             left_data_norm, right_data_norm = (left_data - self.input_mean) / self.input_std, (right_data - self.input_mean) / self.input_std
 

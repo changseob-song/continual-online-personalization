@@ -65,7 +65,7 @@ class OnlineAdaptator_task():
         self.replay_buffer_ON = replay_buffer_ON
 
         self.incline_values = [-5, 0, 5]
-        self.speed_values = [.3, .5, .7, .9,]
+        self.speed_values = [.2, .3, .4, .5, .6, .7, .8, .9,]
         self.bin_number_per_task = 4
 
         self.bin_state = {inc: {spd: {side: {bin_idx: 0 for bin_idx in range(self.bin_number_per_task)} for side in ['L', 'R']} for spd in self.speed_values} for inc in self.incline_values}
@@ -345,7 +345,7 @@ class OnlineAdaptator_task():
 
                 if replay_buffer_ON:
                     for inc, spd, bin_idx in top_k_bins:
-                        if rmse_bins[inc][spd][bin_idx] > replay_threshold:
+                        if (replay_threshold < rmse_bins[inc][spd][bin_idx] < 10):
                             train_loader_combined_list.append(self.bin_loader[inc][spd][side][bin_idx])
                             bins_for_replay.append((inc, spd, bin_idx))
                 
