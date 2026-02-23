@@ -10,9 +10,9 @@ if __name__ == '__main__':
 
     # Trial setting'
     subject = 'SK_Changseob'
-    condition = 'pc_buffer'
-    course_num = 4
-    incline = 'RA_5'
+    condition = 'static'
+    course_num = 6
+    incline = 'RD_5'
 
     trial_name = f'{subject}-{condition}-{course_num}_{incline}'
 
@@ -20,9 +20,9 @@ if __name__ == '__main__':
     trial_dur_sec = 105  # seconds
     adjustment_duration = 10  # seconds
     exo_ON = True
-    adaptation_ON = True
-    replay_buffer_ON = True
-    PC_USE = True
+    adaptation_ON = False
+    replay_buffer_ON = False
+    PC_USE = False
 
     # Trigger setting
     trigger_type = "mocap"  # "mocap" or "typing"

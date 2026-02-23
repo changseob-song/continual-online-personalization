@@ -172,7 +172,7 @@ class OnlineAdaptator_task():
                 param.requires_grad = True
         
         # 3. Load the linear layer weights and biases from previous courses
-        if course_num > 1:
+        if (course_num > 1) and self.adaptation_ON:
             with open(linear_model_path, "rb") as f:
                 linear_params = NumpyCompatUnpickler(f).load()
             model_L.linear.weight.data.copy_(torch.from_numpy(linear_params['weights_L']))
@@ -232,7 +232,7 @@ class OnlineAdaptator_task():
 
         min_adaptation_before_replay = 4 # Minimum number of adaptation steps before starting replay
         min_adaptation_count = 0
-        max_replay_num = 4 # Maximum number of bins to consider for replay
+        max_replay_num = 6 # Maximum number of bins to consider for replay
         loss_threshold = 1.0 # Loss threshold to accept a training step
         replay_threshold = 3.0 # RMSE threshold (%) to include a bin in the replay buffer
 
@@ -338,6 +338,7 @@ class OnlineAdaptator_task():
                 # Select top-k highest RMSE bins
                 k = min(max_replay_num, len(positive_bins))  # Choose up to 4
                 top_k_bins = sorted(positive_bins, key=lambda x: rmse_bins[x[0]][x[1]][x[2]], reverse=True)[:k]
+                print(f"Adaptation Worker: Top {k} bins: {top_k_bins}")
                 
                 # Add bins to replay buffer only if their RMSE is above a threshold
                 bins_for_replay = []
@@ -375,6 +376,7 @@ class OnlineAdaptator_task():
                             tloss += loss.item()
                             num_batches += 1
 
+                    print(f"Avg loss: {tloss / num_batches if num_batches > 0 else 'N/A'}")
                     min_adaptation_count += 1
                                     
                 # After training, get the updated weights and send them back

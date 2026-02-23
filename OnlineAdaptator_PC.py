@@ -267,7 +267,7 @@ class OnlineAdaptator_PC():
         
         min_adaptation_before_replay = 4 # Minimum number of adaptation steps before starting replay
         min_adaptation_count = 0
-        max_replay_num = 4 # Maximum number of bins to consider for replay
+        max_replay_num = 6 # Maximum number of bins to consider for replay
         loss_threshold = 1.0 # Loss threshold to accept a training step
         replay_threshold = 2.5 # RMSE threshold (%) to include a bin in the replay buffer
 
