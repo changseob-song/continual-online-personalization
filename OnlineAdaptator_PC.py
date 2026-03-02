@@ -1,6 +1,8 @@
 # %%
+from json import encoder
+
 from Hyperparam import hyperparam_config
-from Model import TCN
+from Model import TCN, Autoencoder
 import torch, os, time, random
 import numpy as np
 import multiprocessing as mp
@@ -61,10 +63,10 @@ def pca_transform_reconstruction(input_data, mid_peak_idx, pca_matrix, pca_mean,
     input_length_1 = mid_peak_idx
     input_length_2 = input_data.shape[0] - mid_peak_idx # input data shape : (length, channel num)
 
-    input_data_resampled_1 = upsampling_2d(input_data[:mid_peak_idx, :], 50)  # output data shape: (100, channel num)
-    input_data_resampled_2 = upsampling_2d(input_data[mid_peak_idx:, :], 50)  # output data shape: (100, channel num)
-    input_data_scaled_1 = (input_data_resampled_1.flatten() - pca_mean) / pca_scale # shape: (100,)
-    input_data_scaled_2 = (input_data_resampled_2.flatten() - pca_mean) / pca_scale # shape: (100,)
+    input_data_resampled_1 = upsampling_2d(input_data[:mid_peak_idx, :], 50)  # output data shape: (50, 2)
+    input_data_resampled_2 = upsampling_2d(input_data[mid_peak_idx:, :], 50)  # output data shape: (50, 2)
+    input_data_scaled_1 = (input_data_resampled_1.flatten() - pca_mean) / pca_scale # shape: (50,)
+    input_data_scaled_2 = (input_data_resampled_2.flatten() - pca_mean) / pca_scale # shape: (50,)
     
     # Calculate PCA scores explicitly (without length appended)
     pca_scores_1 = np.dot(input_data_scaled_1, pca_matrix)
@@ -87,11 +89,40 @@ def pca_transform_reconstruction(input_data, mid_peak_idx, pca_matrix, pca_mean,
 
     return np.mean([input_data_reduced_1, input_data_reduced_2], axis=0) , np.mean([reconstruction_error_scaled_1, reconstruction_error_scaled_2])
 
+def encoder_reconstruction(input_data, mid_peak_idx, encoder_model):
+    # Prepare the pca input
+    if isinstance(mid_peak_idx, (np.ndarray, list)):
+        mid_peak_idx = int(mid_peak_idx[0])
+    
+    input_length_1 = mid_peak_idx
+    input_length_2 = input_data.shape[0] - mid_peak_idx # input data shape : (length, channel num)
+
+    input_data_resampled_1 = upsampling_2d(input_data[:mid_peak_idx, :], 50)  # output data shape: (50, 2)
+    input_data_resampled_2 = upsampling_2d(input_data[mid_peak_idx:, :], 50)  # output data shape: (50, 2)
+    
+    # Get device from model parameters
+    device = next(encoder_model.parameters()).device
+
+    # Calculate PCA scores explicitly (without length appended)
+    latent_1, reconst_1 = encoder_model(torch.from_numpy(input_data_resampled_1.flatten()).float().unsqueeze(0).to(device))
+    latent_2, reconst_2 = encoder_model(torch.from_numpy(input_data_resampled_2.flatten()).float().unsqueeze(0).to(device))
+    
+    # Create the reduced vector for grid key (with length)
+    input_data_reduced_1 = np.r_[latent_1.detach().cpu().numpy().flatten(), input_length_1]
+    input_data_reduced_2 = np.r_[latent_2.detach().cpu().numpy().flatten(), input_length_2]
+
+    # Calculate reconstruction error
+    reconstruction_error_scaled_1 = np.sqrt(np.mean((input_data_resampled_1.flatten() - reconst_1.detach().cpu().numpy().flatten()) ** 2))
+    reconstruction_error_scaled_2 = np.sqrt(np.mean((input_data_resampled_2.flatten() - reconst_2.detach().cpu().numpy().flatten()) ** 2))
+
+    return np.mean([input_data_reduced_1, input_data_reduced_2], axis=0) , np.mean([reconstruction_error_scaled_1, reconstruction_error_scaled_2])
+
 
 class OnlineAdaptator_PC():
-    def __init__(self, model_path, pca_model_path, course_num, linear_layer_path, buffer_file_path, adaptation_ON=False, replay_buffer_ON=False):
+    def __init__(self, model_path, pca_model_path, encoder_model_path, course_num, linear_layer_path, buffer_file_path, adaptation_ON=False, replay_buffer_ON=False):
         self.model_path = model_path
         self.pca_model_path = pca_model_path
+        self.encoder_model_path = encoder_model_path
         self.course_num = course_num
         self.linear_layer_path = linear_layer_path
         self.buffer_file_path = buffer_file_path
@@ -108,7 +139,7 @@ class OnlineAdaptator_PC():
         # Start the new standalone worker process
         self.adaptation_process = mp.Process(
             target=self.adaptation_worker_process,
-            args=(self.input_q, self.output_q, self.model_path, self.pca_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path, hyperparam_config, self.adaptation_ON, self.replay_buffer_ON)
+            args=(self.input_q, self.output_q, self.model_path, self.pca_model_path, self.encoder_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path, hyperparam_config, self.adaptation_ON, self.replay_buffer_ON)
         )
         self.adaptation_process.start()
 
@@ -174,7 +205,7 @@ class OnlineAdaptator_PC():
         except Exception as e:
             print(f"Adaptation Worker: Error during warm-up: {e}")
 
-    def adaptation_worker_process(self, input_q, output_q, model_path, pca_model_path, course_num, linear_model_path, buffer_file_path, hyperparam_config, adaptation_ON=False, replay_buffer_ON=False):
+    def adaptation_worker_process(self, input_q, output_q, model_path, pca_model_path, encoder_model_path, course_num, linear_model_path, buffer_file_path, hyperparam_config, adaptation_ON=False, replay_buffer_ON=False):
         """
         This worker process handles the fine-tuning of the model.
         All PyTorch and CUDA initializations happen inside this function.
@@ -194,6 +225,15 @@ class OnlineAdaptator_PC():
         pca_matrix = pca_file['pca_matrix']  # shape: (original_dim, reduced_dim))
         pca_mean = pca_file['scaler_mean']      # shape: (original_dim,)
         pca_scale = pca_file['scaler_scale']    # shape: (original_dim,)
+
+        checkpoint = torch.load(encoder_model_path, map_location=device, weights_only=True)
+
+        encoder = Autoencoder(
+            input_dim=100,
+            hidden_dim=64,
+            latent_dim=2
+        ).to(device)
+        encoder.load_state_dict(checkpoint["model_state_dict"])
 
         # 1. Initialize models inside the worker
         model_L = TCN(hyperparam_config).to(device)
@@ -273,6 +313,7 @@ class OnlineAdaptator_PC():
 
         grid_resolution = 2
         cadence_resolution = 10
+        # grid_resolution = 10
 
         # Main loop to wait for data and fine-tune
         while True:
@@ -288,13 +329,14 @@ class OnlineAdaptator_PC():
                 start_time = time.time()
 
                 # Determine either left or right side
-                side, incline, speed, input_data, mid_peak_idx, start_idx  = msg
+                side, incline, speed, input_data, mid_peak_idx, end_idx  = msg
 
                 model = model_R if side == 'R' else model_L
                 optimizer = optimizer_R if side == 'R' else optimizer_L
 
                 # 1. Go through PCA transformation
                 input_data_reduced, reconstruction_error_scaled = pca_transform_reconstruction(input_data, mid_peak_idx, pca_matrix, pca_mean, pca_scale)
+                # input_data_reduced, reconstruction_error_scaled = encoder_reconstruction(input_data, mid_peak_idx, encoder)
                 print(f"Adaptation Worker: PCA transformation done. Reconstruction error (scaled): {reconstruction_error_scaled:.2f}")
 
                 # 2. Check misdetection based on reconstruction error 
@@ -406,9 +448,10 @@ class OnlineAdaptator_PC():
                 updated_weights = model.linear.weight.data.clone().cpu().numpy()
                 updated_biases = model.linear.bias.data.clone().cpu().numpy()
 
+                update_latency = time.time() - start_time
                 # print(f"time taken for adaptation: {time.time() - start_time:.2f} seconds")
 
-                output_q.put((side, start_idx, input_data_reduced, grid_key, bins_for_replay, updated_weights, updated_biases))
+                output_q.put((side, end_idx, update_latency, input_data_reduced, grid_key, bins_for_replay, updated_weights, updated_biases))
 
             except Exception as e:
                 print(f"Adaptation worker error: {e}")

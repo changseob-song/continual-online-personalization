@@ -291,6 +291,8 @@ def save_data(data_to_save_controller, data_to_save_adaptator, trial_name, pulse
     # Construct the dictionary with the FIXED lists
     pc_data_R = {
         'update_start_idx_R': sliced_data_adaptator['update_start_idx_R'],
+        'update_latency_R': sliced_data_adaptator['update_latency_R'],
+        'update_dur_R': sliced_data_adaptator['update_dur_R'],
         'input_reduced_R': input_reduced_R_fixed,
         'grid_key_R': grid_key_R_fixed,
         'replayed_bins_R': replayed_bins_R_fixed   # Use the fixed version
@@ -298,6 +300,8 @@ def save_data(data_to_save_controller, data_to_save_adaptator, trial_name, pulse
 
     pc_data_L = {
         'update_start_idx_L': sliced_data_adaptator['update_start_idx_L'],
+        'update_latency_L': sliced_data_adaptator['update_latency_L'],
+        'update_dur_L': sliced_data_adaptator['update_dur_L'],
         'input_reduced_L': input_reduced_L_fixed,
         'grid_key_L': grid_key_L_fixed,
         'replayed_bins_L': replayed_bins_L_fixed   # Use the fixed version

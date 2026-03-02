@@ -134,3 +134,24 @@ class TCN(nn.Module):
         y = y.flatten(start_dim=1) # Shape: (batch_size, num_channels[-1] * sequence_length)
         y = self.linear(y.float())
         return y
+
+class Autoencoder(nn.Module):
+    def __init__(self, input_dim=100, hidden_dim=64, latent_dim=2):
+        super(Autoencoder, self).__init__()
+        
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, latent_dim)
+        )
+        
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, input_dim)
+        )
+
+    def forward(self, x):
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
+        return encoded, decoded

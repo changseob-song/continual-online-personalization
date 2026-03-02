@@ -10,9 +10,9 @@ if __name__ == '__main__':
 
     # Trial setting'
     subject = 'SK_Changseob'
-    condition = 'static'
-    course_num = 6
-    incline = 'RD_5'
+    condition = 'replay_number_exp'
+    course_num = 1 # 1, 2, 3, 4, 5, 6
+    incline = 'LG' # LG, RA_5, RD_5, LG, RA_5, RD_5
 
     trial_name = f'{subject}-{condition}-{course_num}_{incline}'
 
@@ -20,9 +20,9 @@ if __name__ == '__main__':
     trial_dur_sec = 105  # seconds
     adjustment_duration = 10  # seconds
     exo_ON = True
-    adaptation_ON = False
-    replay_buffer_ON = False
-    PC_USE = False
+    adaptation_ON = True
+    replay_buffer_ON = True
+    PC_USE = True
 
     # Trigger setting
     trigger_type = "mocap"  # "mocap" or "typing"
@@ -38,7 +38,9 @@ if __name__ == '__main__':
     # torque profile path
     torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/torque_splines.pkl'
     # PCA model path
-    pca_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/pca_model_pos_1gc_2_50.pkl'
+    pca_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/pca_model_pos_1gc_2_50_RDflipped.pkl'
+    # Encoder model path
+    encoder_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/autoencoder_mtr.pt'
 
     # Linear layer numpy file
     linear_layer_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/linear_layer_weights_biases.pkl'
@@ -47,7 +49,7 @@ if __name__ == '__main__':
     
     # Initialize Control loop class
     controller = Controller(pt_model_path, trt_engine_path, torque_profile_path, pca_model_path,
-                            linear_layer_path, buffer_file_path,
+                            encoder_model_path, linear_layer_path, buffer_file_path,
                             trigger_type, trial_name, course_num, incline,
                             pulse_after_start, trial_dur_sec, adjustment_duration,
                             body_mass_kg,

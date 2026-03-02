@@ -13,7 +13,7 @@ from Exo import Exo
 from scipy.signal import find_peaks
 
 class Controller:
-    def __init__(self, pt_model_path, trt_engine_path, torque_profile_path, pca_model_path,
+    def __init__(self, pt_model_path, trt_engine_path, torque_profile_path, pca_model_path, encoder_model_path,
                  linear_layer_path, buffer_file_path,
                  trigger_type, trial_name, course_num, incline, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
                  adaptation_ON=False, replay_buffer_ON=False, PC_USE=False):
@@ -21,6 +21,7 @@ class Controller:
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
         self.trt_engine_path = trt_engine_path
         self.pca_model_path = pca_model_path
+        self.encoder_model_path = encoder_model_path
         self.linear_layer_path = linear_layer_path
         self.buffer_file_path = buffer_file_path
         self.trigger_type = trigger_type
@@ -95,10 +96,10 @@ class Controller:
 
         # Initialize OnlineAdaptator
         if PC_USE:
-            self.online_adaptator = OnlineAdaptator_PC(self.pt_model_path, self.pca_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path,
+            self.online_adaptator = OnlineAdaptator_PC(self.pt_model_path, self.pca_model_path, self.encoder_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path,
                                                 self.adaptation_ON, self.replay_buffer_ON)
         else:
-            self.online_adaptator = OnlineAdaptator_task(self.pt_model_path, self.pca_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path,
+            self.online_adaptator = OnlineAdaptator_task(self.pt_model_path, self.pca_model_path, self.encoder_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path,
                                                 self.adaptation_ON, self.replay_buffer_ON)
 
         self.incline_keys = {'RD_10': -10, 'RD_5': -5, 'LG': 0, 'RA_5': 5, 'RA_10': 10}
@@ -138,6 +139,7 @@ class Controller:
         model_output_r_val = last_model_output_r; model_output_l_val = last_model_output_l
 
         update_latency_R, update_latency_L = 0.0, 0.0
+        update_dur_R, update_dur_L = 0.0, 0.0
         gp_loop_index = 0
         start_idx_L, start_idx_R = -1, -1
 
@@ -159,6 +161,8 @@ class Controller:
         }
         self.data_to_save_adaptator = {
             'update_start_idx_L': [], 'update_start_idx_R': [],
+            'update_latency_L': [], 'update_latency_R': [],
+            'update_dur_L': [], 'update_dur_R': [],
             'input_reduced_R': [], 'input_reduced_L': [],
             'grid_key_R': [], 'grid_key_L': [], 'replayed_bins_R': [], 'replayed_bins_L': [],
         }
@@ -175,6 +179,8 @@ class Controller:
         log_gpio_output = self.data_to_save['gpio_output']
 
         log_start_idx_L = self.data_to_save_adaptator['update_start_idx_L']; log_start_idx_R = self.data_to_save_adaptator['update_start_idx_R']
+        log_update_latency_L = self.data_to_save_adaptator['update_latency_L']; log_update_latency_R = self.data_to_save_adaptator['update_latency_R']
+        log_update_dur_L = self.data_to_save_adaptator['update_dur_L']; log_update_dur_R = self.data_to_save_adaptator['update_dur_R']
         log_input_reduced_L = self.data_to_save_adaptator['input_reduced_L']; log_input_reduced_R = self.data_to_save_adaptator['input_reduced_R']
         log_grid_key_L = self.data_to_save_adaptator['grid_key_L']; log_grid_key_R = self.data_to_save_adaptator['grid_key_R']
         log_replayed_bins_L = self.data_to_save_adaptator['replayed_bins_L']; log_replayed_bins_R = self.data_to_save_adaptator['replayed_bins_R']
@@ -261,8 +267,8 @@ class Controller:
                 buffer_start_abs = loop_index - len(input_stream_data[0, 0, :])
 
                 # Check if there are enough new heel strikes for an update (2 gait cycles = 2 new heel strikes after the start)
-                if (self.last_used_peak_idx_L not in heelstrike_indices_L):
-                    if len(heelstrike_indices_L) > update_freq_gc + num_skipped_cycles:
+                if len(heelstrike_indices_L) > update_freq_gc: # Only trigger if heel strikes >= 3
+                    if (self.last_used_peak_idx_L not in heelstrike_indices_L[-3:]): # Only trigger if the last used peak is not in the recent heel strikes
                         # Get the absolute start and end indices for the data slice
                         start_idx_abs = heelstrike_indices_L[-3]; end_idx_abs = heelstrike_indices_L[-1]
                         print('\nL', start_idx_abs, heelstrike_indices_L[-2:-1], end_idx_abs)
@@ -272,14 +278,14 @@ class Controller:
                         start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
                         input_stream_data_L = input_stream_data[0, :, start_idx_rel:end_idx_rel]
 
-                        self.online_adaptator.trigger_finetuning('L', current_incline, current_speed, input_stream_data_L.T.copy(), mid_peak_idx_rel, start_idx_abs)
+                        self.online_adaptator.trigger_finetuning('L', current_incline, current_speed, input_stream_data_L.T.copy(), mid_peak_idx_rel, end_idx_abs)
 
                         # Update the last used peak to the end of the current window
-                        self.last_used_peak_idx_L = end_idx_abs
+                        self.last_used_peak_idx_L = heelstrike_indices_L[-1]
 
                 # Check if there are enough new heel strikes for an update (2 gait cycles = 2 new heel strikes after the start)
-                if (self.last_used_peak_idx_R not in heelstrike_indices_R):
-                    if len(heelstrike_indices_R) > update_freq_gc + num_skipped_cycles:
+                if len(heelstrike_indices_R) > update_freq_gc:
+                    if (self.last_used_peak_idx_R not in heelstrike_indices_R[-3:]):
                         # Get the absolute start and end indices for the data slice
                         start_idx_abs = heelstrike_indices_R[-3]; end_idx_abs = heelstrike_indices_R[-1]
                         print('\nR', start_idx_abs, heelstrike_indices_R[-2:-1], end_idx_abs)
@@ -289,25 +295,27 @@ class Controller:
                         start_idx_rel = start_idx_abs - buffer_start_abs; end_idx_rel = end_idx_abs - buffer_start_abs
                         input_stream_data_R = input_stream_data[1, :, start_idx_rel:end_idx_rel]
 
-                        self.online_adaptator.trigger_finetuning('R', current_incline, current_speed, input_stream_data_R.T.copy(), mid_peak_idx_rel, start_idx_abs)
+                        self.online_adaptator.trigger_finetuning('R', current_incline, current_speed, input_stream_data_R.T.copy(), mid_peak_idx_rel, end_idx_abs)
 
                         # Update the last used peak to the end of the current window
-                        self.last_used_peak_idx_R = end_idx_abs
+                        self.last_used_peak_idx_R = heelstrike_indices_R[-1]
 
             # Check for new weights from the adaptation worker
             updated_params = self.online_adaptator.get_updated_weights()
             if updated_params:
-                side, start_index, input_reduced, grid_key, replayed_bins, weights, biases = updated_params
+                side, start_index, update_dur, input_reduced, grid_key, replayed_bins, weights, biases = updated_params
                 if side == 'R':
                     self.linear_weights_R = weights;    self.linear_biases_R = biases
                     start_idx_R = start_index;  log_start_idx_R.append(start_index)
+                    update_dur_R = update_dur; log_update_dur_R.append(update_dur)
                     log_input_reduced_R.append(input_reduced); log_grid_key_R.append(grid_key); log_replayed_bins_R.append(replayed_bins)
-                    update_latency_R = (loop_index - start_index) / self.Exo.control_freq_Hz
+                    update_latency_R = (loop_index - start_index) / self.Exo.control_freq_Hz; log_update_latency_R.append(update_latency_R)
                 elif side == 'L':
                     self.linear_weights_L = weights;    self.linear_biases_L = biases
                     start_idx_L = start_index;   log_start_idx_L.append(start_index)
+                    update_dur_L = update_dur; log_update_dur_L.append(update_dur)
                     log_input_reduced_L.append(input_reduced); log_grid_key_L.append(grid_key); log_replayed_bins_L.append(replayed_bins)
-                    update_latency_L = (loop_index - start_index) / self.Exo.control_freq_Hz
+                    update_latency_L = (loop_index - start_index) / self.Exo.control_freq_Hz; log_update_latency_L.append(update_latency_L)
 
             # 5. TensorRT inference & Apply linear layer weights and biases
             if self.gait_phase_output_q.empty():
@@ -417,10 +425,12 @@ class Controller:
                 "speed": current_speed,
                 "update_latency_L": update_latency_L,
                 "update_latency_R": update_latency_R,
+                "update_duration_L": update_dur_L,
+                "update_duration_R": update_dur_R,
                 "start_idx_L": start_idx_L,
                 "start_idx_R": start_idx_R,
+                "loop_index": loop_index,
                 "loop_time_exceeded": loop_time_exceeded,
-                "gp_inference": (gp_loop_index-loop_index),
             }
             self.teleplot.sendBatchTelemetry(telemetry_data)
 
