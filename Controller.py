@@ -102,7 +102,7 @@ class Controller:
             self.online_adaptator = OnlineAdaptator_task(self.pt_model_path, self.pca_model_path, self.encoder_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path,
                                                 self.adaptation_ON, self.replay_buffer_ON)
 
-        self.incline_keys = {'RD_10': -10, 'RD_5': -5, 'LG': 0, 'RA_5': 5, 'RA_10': 10}
+        self.incline_keys = {'RD': -10, 'RD_slow': -10, 'RD_fast': -10, 'LG': 0, 'LG_slow': 0, 'LG_fast': 0, 'RA': 10, 'RA_slow': 10, 'RA_fast': 10}
 
     def detect_heel_strike(self, GRF_data, threshold, min_interval):
         # Create binary GRF signal based on threshold
@@ -348,6 +348,8 @@ class Controller:
             elif (gait_phase_R - gait_phase_R_prev) > 30: gait_phase_R = gait_phase_R_prev
             else: gait_phase_R_prev = gait_phase_R
 
+            if current_speed == 0: current_speed = prev_speed
+
             # Calculate gradual torque scaling factor
             gradual_torque_scale = min(1.0, ((loop_index / self.Exo.control_freq_Hz)) / self.adjustment_duration)
 
@@ -450,7 +452,7 @@ class Controller:
         self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, 0)
 
         save_data(self.data_to_save, self.data_to_save_adaptator, self.trial_name, self.pulse_after_start, self.trial_dur_sec)
-        save_weights_biases(self.linear_weights_L, self.linear_biases_L, self.linear_weights_R, self.linear_biases_R, self.linear_layer_path)
+        save_weights_biases(self.linear_weights_L, self.linear_biases_L, self.linear_weights_R, self.linear_biases_R, self.linear_layer_path, self.course_num)
         self.online_adaptator.stop_worker()
         cleanup_can(self.Exo.bus, self.Exo.notifier)
         self.GPIO_control.safe_gpio_cleanup()

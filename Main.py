@@ -9,26 +9,26 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     # Trial setting'
-    subject = 'SK_Changseob'
-    condition = 'replay_number_exp'
-    course_num = 1 # 1, 2, 3, 4, 5, 6
-    incline = 'LG' # LG, RA_5, RD_5, LG, RA_5, RD_5
+    subject = 'SK_Amy'
+    condition = 'task_buffer'
+    course_num = 5 # 1, 2, 3, 4, 5, 6
+    incline = 'RD_slow' # LG, RA_5, RD_5, LG, RA_5, RD_5
 
     trial_name = f'{subject}-{condition}-{course_num}_{incline}'
 
     pulse_after_start = 10  # seconds
-    trial_dur_sec = 105  # seconds
+    trial_dur_sec = 60 * .5  # seconds
     adjustment_duration = 10  # seconds
     exo_ON = True
     adaptation_ON = True
     replay_buffer_ON = True
-    PC_USE = True
+    PC_USE = False
 
     # Trigger setting
     trigger_type = "mocap"  # "mocap" or "typing"
 
     # Body mass setting
-    body_mass_kg = 75  # kg
+    body_mass_kg = 54  # kg
 
     # Model path
     # tcn_only
@@ -38,12 +38,12 @@ if __name__ == '__main__':
     # torque profile path
     torque_profile_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/torque_splines.pkl'
     # PCA model path
-    pca_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/pca_model_pos_1gc_2_50_RDflipped.pkl'
+    pca_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/pca_model_pos_1gc_2_50_outlierexcluded.pkl'
     # Encoder model path
     encoder_model_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/autoencoder_mtr.pt'
 
     # Linear layer numpy file
-    linear_layer_path = '/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/linear_layer_weights_biases.pkl'
+    linear_layer_path = f'/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/linear_layer_weights_biases_{course_num-1}.pkl'
     # Buffer file
     buffer_file_path = f'/home/metamobility2/Changseob/online_adaptation_GPE/Controller_Online_Adaptation_GPE_indoor/buffer_{course_num-1}.pkl'
     

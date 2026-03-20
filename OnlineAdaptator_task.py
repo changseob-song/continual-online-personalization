@@ -53,7 +53,7 @@ def rmse_monitoring(model, full_loader, device):
     return rmse
 
 class OnlineAdaptator_task():
-    def __init__(self, model_path, pca_model_path, course_num, linear_layer_path, buffer_file_path, adaptation_ON=False, replay_buffer_ON=False):
+    def __init__(self, model_path, pca_model_path, encoder_path, course_num, linear_layer_path, buffer_file_path, adaptation_ON=False, replay_buffer_ON=False):
         self.model_path = model_path
         self.pca_model_path = pca_model_path
         self.course_num = course_num
@@ -64,8 +64,8 @@ class OnlineAdaptator_task():
         self.adaptation_ON = adaptation_ON
         self.replay_buffer_ON = replay_buffer_ON
 
-        self.incline_values = [-5, 0, 5]
-        self.speed_values = [.2, .3, .4, .5, .6, .7, .8, .9,]
+        self.incline_values = [-10, 0, 10]
+        self.speed_values = [.2, .3, .4, .5, .6, .7, .8, .9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]
         self.bin_number_per_task = 4
 
         self.bin_state = {inc: {spd: {side: {bin_idx: 0 for bin_idx in range(self.bin_number_per_task)} for side in ['L', 'R']} for spd in self.speed_values} for inc in self.incline_values}
@@ -232,9 +232,9 @@ class OnlineAdaptator_task():
 
         min_adaptation_before_replay = 4 # Minimum number of adaptation steps before starting replay
         min_adaptation_count = 0
-        max_replay_num = 6 # Maximum number of bins to consider for replay
+        max_replay_num = 5 # Maximum number of bins to consider for replay
         loss_threshold = 1.0 # Loss threshold to accept a training step
-        replay_threshold = 3.0 # RMSE threshold (%) to include a bin in the replay buffer
+        replay_threshold = 2.5 # RMSE threshold (%) to include a bin in the replay buffer
 
         # Main loop to wait for data and fine-tune
         while True:
@@ -338,7 +338,7 @@ class OnlineAdaptator_task():
                 # Select top-k highest RMSE bins
                 k = min(max_replay_num, len(positive_bins))  # Choose up to 4
                 top_k_bins = sorted(positive_bins, key=lambda x: rmse_bins[x[0]][x[1]][x[2]], reverse=True)[:k]
-                print(f"Adaptation Worker: Top {k} bins: {top_k_bins}")
+                print(f"Adaptation Worker: Top {k} bins: {top_k_bins} / {len(positive_bins)}")
                 
                 # Add bins to replay buffer only if their RMSE is above a threshold
                 bins_for_replay = []
@@ -346,7 +346,7 @@ class OnlineAdaptator_task():
 
                 if replay_buffer_ON:
                     for inc, spd, bin_idx in top_k_bins:
-                        if (replay_threshold < rmse_bins[inc][spd][bin_idx] < 10):
+                        if (replay_threshold < rmse_bins[inc][spd][bin_idx] < 15):
                             train_loader_combined_list.append(self.bin_loader[inc][spd][side][bin_idx])
                             bins_for_replay.append((inc, spd, bin_idx))
                 
@@ -383,7 +383,9 @@ class OnlineAdaptator_task():
                 updated_weights = model.linear.weight.data.clone().cpu().numpy()
                 updated_biases = model.linear.bias.data.clone().cpu().numpy()
 
-                output_q.put((side, start_idx, 'None', 'None', 'None', updated_weights, updated_biases))
+                update_latency = time.time() - start_time
+
+                output_q.put((side, start_idx, update_latency, 'None', 'None', 'None', updated_weights, updated_biases))
 
             except Exception as e:
                 print(f"Adaptation worker error: {e}")

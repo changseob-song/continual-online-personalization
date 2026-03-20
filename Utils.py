@@ -320,13 +320,14 @@ def save_data(data_to_save_controller, data_to_save_adaptator, trial_name, pulse
     print(f'Data saved to {trial_name}-pc_L.csv. Dimensions: {df_pc_L.shape}')
 
 # Function to save linear layer weights and biases
-def save_weights_biases(linear_weights_L, linear_biases_L, linear_weights_R, linear_biases_R, linear_layer_path):
+def save_weights_biases(linear_weights_L, linear_biases_L, linear_weights_R, linear_biases_R, linear_layer_path, course_num):
     linear_params = {
         'weights_L': linear_weights_L,
         'biases_L': linear_biases_L,
         'weights_R': linear_weights_R,
         'biases_R': linear_biases_R
     }
+    linear_layer_path = linear_layer_path[:-5] + str(course_num) + '.pkl'
     with open(linear_layer_path, "wb") as f:
         pickle.dump(linear_params, f)
     print(f'Linear layer weights and biases saved to {linear_layer_path}.')

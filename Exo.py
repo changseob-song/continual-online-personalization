@@ -13,7 +13,7 @@ class Exo:
         self.frame_length_task = 200  # Window size for task estimator (in frames)
 
         # biotorque parameters
-        self.scale_factor = 1
+        self.scale_factor = 0.3
         self.delay_factor = 0  # Number of frames to delay the torque command
         self.max_torque = 12.5  # Maximum allowable torque (Nm)
 
