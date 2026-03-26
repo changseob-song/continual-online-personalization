@@ -200,7 +200,7 @@ class OnlineAdaptator_PC():
                     loss.backward()
                     optimizer.step()
                     break # Only need one step for warm-up
-            print("Adaptation Worker: Warm-up complete.")
+            print(f"Adaptation Worker: Warm-up complete. \n Start the trial...")
 
         except Exception as e:
             print(f"Adaptation Worker: Error during warm-up: {e}")

@@ -136,7 +136,7 @@ class OnlineAdaptator_task():
                     loss.backward()
                     optimizer.step()
                     break # Only need one step for warm-up
-            print("Adaptation Worker: Warm-up complete.")
+            print(f"Adaptation Worker: Warm-up complete. \n Start the trial...")
 
         except Exception as e:
             print(f"Adaptation Worker: Error during warm-up: {e}")
@@ -146,6 +146,9 @@ class OnlineAdaptator_task():
         This worker process handles the fine-tuning of the model.
         All PyTorch and CUDA initializations happen inside this function.
         """
+        # Set environment variables for better CUDA memory management
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128,garbage_collection_threshold:0.8,expandable_segments:True"
+
         signal.signal(signal.SIGINT, signal.SIG_IGN) # revents the worker from dying immediately when Ctrl+C is pressed,
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         print(f"Adaptation Worker: Using device: {device}")
@@ -157,13 +160,35 @@ class OnlineAdaptator_task():
         label_std = np.load(os.path.join(base_model_path, 'label_std.npy'))
 
         # 1. Initialize models inside the worker
-        model_L = TCN(hyperparam_config).to(device)
-        model_R = TCN(hyperparam_config).to(device)
-        model_dummy = TCN(hyperparam_config).to(device) # Dummy model for warm-up
-        model_L.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-        model_R.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-        model_dummy.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-
+        try:
+            model_L = TCN(hyperparam_config).to(device)
+            model_R = TCN(hyperparam_config).to(device)
+            model_dummy = TCN(hyperparam_config).to(device) # Dummy model for warm-up
+            
+            model_L.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+            model_R.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+            model_dummy.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+            
+        except RuntimeError as e:
+            if "out of memory" in str(e):
+                print(f"Adaptation Worker: CUDA OOM on {device}. Falling back to CPU.", flush=True)
+                # Cleanup potential partial allocations
+                if 'model_L' in locals(): del model_L
+                if 'model_R' in locals(): del model_R
+                if 'model_dummy' in locals(): del model_dummy
+                if device == 'cuda': torch.cuda.empty_cache()
+                
+                device = 'cpu'
+                model_L = TCN(hyperparam_config).to(device)
+                model_R = TCN(hyperparam_config).to(device)
+                model_dummy = TCN(hyperparam_config).to(device) # Dummy model for warm-up
+                
+                model_L.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+                model_R.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+                model_dummy.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+            else:
+                raise e
+            
         # 2. Freeze layers and setup optimizers
         for model in [model_L, model_R]:
             for param in model.parameters():

@@ -239,7 +239,7 @@ def save_data(data_to_save_controller, data_to_save_adaptator, trial_name, pulse
     sliced_data = {k: v[start_idx:end_idx] for k, v in data_np_controller.items()}
 
     # Define data for motor CSV
-    motor_cols = ['timestamp', 'mtr_pos_L', 'mtr_pos_R', 'mtr_vel_L', 'mtr_vel_R', 'GRF_L', 'GRF_R', 'gpio_output']
+    motor_cols = ['timestamp', 'mtr_pos_L', 'mtr_pos_R', 'mtr_vel_L', 'mtr_vel_R', 'GRF_L', 'GRF_R', 'CoP_L', 'CoP_R', 'gpio_output']
     save_dataframe(f'{trial_name}-input_motor.csv', sliced_data, motor_cols)
 
     # Define data for IMU CSV

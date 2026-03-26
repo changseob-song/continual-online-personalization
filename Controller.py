@@ -13,10 +13,11 @@ from Exo import Exo
 from scipy.signal import find_peaks
 
 class Controller:
-    def __init__(self, pt_model_path, trt_engine_path, torque_profile_path, pca_model_path, encoder_model_path,
+    def __init__(self, Exo, pt_model_path, trt_engine_path, torque_profile_path, pca_model_path, encoder_model_path,
                  linear_layer_path, buffer_file_path,
                  trigger_type, trial_name, course_num, incline, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
                  adaptation_ON=False, replay_buffer_ON=False, PC_USE=False):
+        self.Exo = Exo
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
         self.trt_engine_path = trt_engine_path
@@ -55,13 +56,8 @@ class Controller:
         self.label_mean = np.load(label_mean_path); self.label_std = np.load(label_std_path)
 
         self.num_input_features = self.input_mean.shape[0]
-
-        # Initialize the exoskeleton
-        if self.trigger_type == "mocap":
-            self.mocap_trigger = Mocap_trigger(server_ip="172.24.44.177", port_number=11)
-            self.mocap_trigger.start_client()
+            
         self.GPIO_control = GPIO_control()
-        self.Exo = Exo()
         
         # Initialize lowpass filter
         self.lpf = lowpass_filter()
@@ -154,6 +150,7 @@ class Controller:
             'mtr_vel_L': np.zeros(max_samples), 'mtr_vel_R': np.zeros(max_samples),
             'imu_L': np.zeros((max_samples, 6)), 'imu_R': np.zeros((max_samples, 6)),
             'GRF_L': np.zeros(max_samples), 'GRF_R': np.zeros(max_samples),
+            'CoP_L': np.zeros(max_samples), 'CoP_R': np.zeros(max_samples),
             'mtr_cmd_L': np.zeros(max_samples), 'mtr_cmd_R': np.zeros(max_samples),
             'gait_phase_L': np.zeros(max_samples), 'gait_phase_R': np.zeros(max_samples),
             'incline': ['']*max_samples, 'speed': ['']*max_samples,
@@ -173,6 +170,7 @@ class Controller:
         log_mtr_vel_L, log_mtr_vel_R = self.data_to_save['mtr_vel_L'], self.data_to_save['mtr_vel_R']
         log_imu_L, log_imu_R = self.data_to_save['imu_L'], self.data_to_save['imu_R']
         log_GRF_L, log_GRF_R = self.data_to_save['GRF_L'], self.data_to_save['GRF_R']
+        log_CoP_L, log_CoP_R = self.data_to_save['CoP_L'], self.data_to_save['CoP_R']
         log_mtr_cmd_L, log_mtr_cmd_R = self.data_to_save['mtr_cmd_L'], self.data_to_save['mtr_cmd_R']
         log_gait_phase_L, log_gait_phase_R = self.data_to_save['gait_phase_L'], self.data_to_save['gait_phase_R']
         log_incline = self.data_to_save['incline']; log_speed = self.data_to_save['speed']
@@ -195,6 +193,7 @@ class Controller:
         # Wait for the trigger to start the trial
         if self.trigger_type == "mocap":
             print("Wait for the tensorrt to warm up...\n")
+            self.mocap_trigger = Mocap_trigger(server_ip="172.24.44.177", port_number=11)
             self.mocap_trigger.start_client()
             self.mocap_trigger.stream_start()
             self.mocap_trigger.wait_for_start_logging()
@@ -209,7 +208,7 @@ class Controller:
 
         # Main control loop
         while True:
-
+            
             # 1. Read the motor encoder values
             mtr_pos_L, mtr_vel_L = self.Exo.update_readings(self.Exo.CAN_id_L)
             mtr_pos_R, mtr_vel_R = self.Exo.update_readings(self.Exo.CAN_id_R)
@@ -223,9 +222,10 @@ class Controller:
             log_imu_L[loop_index, :], log_imu_R[loop_index, :] = imu_L, imu_R
 
             # 2.1 Read the GRF values
-            GRF_L, GRF_R, current_speed = self.mocap_trigger.get_GRF()
+            GRF_L, GRF_R, CoP_L, CoP_R, current_speed = self.mocap_trigger.get_GRF()
             if prev_speed is None: prev_speed = current_speed
             log_GRF_L[loop_index] = GRF_L; log_GRF_R[loop_index] = GRF_R
+            log_CoP_L[loop_index] = CoP_L; log_CoP_R[loop_index] = CoP_R
             log_incline[loop_index] = current_incline; log_speed[loop_index] = current_speed
 
             # 3. Mirror the left data to the right side (Unilateral model input)
@@ -403,8 +403,20 @@ class Controller:
             if second_pulse_sent and second_pulse_end_time and current_time >= second_pulse_end_time:
                 self.GPIO_control.send_gpio_pulse_end()
                 second_pulse_end_time = None
-                print("Press ctrl + c in 10 seconds !")
-                time.sleep(10)
+                print("Trial ended, saving data and exiting...")
+                # Apply zero torque to the motors
+                self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_L, 0)
+                self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, 0)
+
+                save_data(self.data_to_save, self.data_to_save_adaptator, self.trial_name, self.pulse_after_start, self.trial_dur_sec)
+                save_weights_biases(self.linear_weights_L, self.linear_biases_L, self.linear_weights_R, self.linear_biases_R, self.linear_layer_path, self.course_num)
+                self.gait_phase_inference_process.terminate()
+                self.online_adaptator.stop_worker()
+                
+                cleanup_can(self.Exo.bus, self.Exo.notifier)
+                self.GPIO_control.safe_gpio_cleanup()
+                gc.collect()
+                torch.cuda.empty_cache()
                 break # Exit the loop after the second pulse ends
 
             # GPIO output logging
@@ -446,14 +458,11 @@ class Controller:
     # Signal handler for graceful exit
     def exit_signal_handler(self, sig, frame):
         print("Ctrl + C pressed, shutting down...")
-
+        
         # Apply zero torque to the motors
         self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_L, 0)
         self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, 0)
 
-        save_data(self.data_to_save, self.data_to_save_adaptator, self.trial_name, self.pulse_after_start, self.trial_dur_sec)
-        save_weights_biases(self.linear_weights_L, self.linear_biases_L, self.linear_weights_R, self.linear_biases_R, self.linear_layer_path, self.course_num)
-        self.online_adaptator.stop_worker()
         cleanup_can(self.Exo.bus, self.Exo.notifier)
         self.GPIO_control.safe_gpio_cleanup()
 

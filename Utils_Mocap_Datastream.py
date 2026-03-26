@@ -52,7 +52,7 @@ class Mocap_trigger:
         # Wait until at least one packet has arrived to ensure data validity
         self.first_data_received.wait()
         with self.lock:
-            return self.GRF_L, self.GRF_R, self.speed
+            return self.GRF_L, self.GRF_R, self.CoP_L, self.CoP_R, self.speed
 
     def stream_start(self):
         """Start the data receiving loop in a background thread"""
@@ -95,6 +95,8 @@ class Mocap_trigger:
                         with self.lock:
                             self.GRF_R = float(data.get("GRF_R", 0.000))
                             self.GRF_L = float(data.get("GRF_L", 0.000))
+                            self.CoP_R = float(data.get("CoP_R", 0.000))
+                            self.CoP_L = float(data.get("CoP_L", 0.000))
                             self.speed = float(data.get("speed", 0.00))
                             self.time_sent = send_time
                             
@@ -118,7 +120,7 @@ class Mocap_trigger:
                 self.running = False
                 break
 
-        return self.GRF_L, self.GRF_R
+        return self.GRF_L, self.GRF_R, self.CoP_L, self.CoP_R
 
     def get_gait_phase_percentages(self):
         # Optional: Wait until data is ready before proceeding
@@ -135,7 +137,7 @@ class Mocap_trigger:
 
     def wait_for_start_logging(self):
         """Wait for the server to send the start logging signal"""
-        print("[INFO] Waiting for start logging signal from server...")
+        # print("[INFO] Waiting for start logging signal from server...")
         self.start_logging_event.wait()
         print("[INFO] Start logging signal received.")
         return True
