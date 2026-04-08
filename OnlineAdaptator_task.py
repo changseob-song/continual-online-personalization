@@ -204,7 +204,7 @@ class OnlineAdaptator_task():
             model_L.linear.bias.data.copy_(torch.from_numpy(linear_params['biases_L']))
             model_R.linear.weight.data.copy_(torch.from_numpy(linear_params['weights_R']))
             model_R.linear.bias.data.copy_(torch.from_numpy(linear_params['biases_R']))
-            print("Adaptation Worker: Loaded linear layer weights and biases from file.")
+            print(f"Adaptation Worker: Loaded linear layer weights and biases from {linear_model_path}.")
             with open(buffer_file_path, "rb") as f:
                 buffer_data = NumpyCompatUnpickler(f).load()
             self.bin_state = buffer_data['bin_state']
@@ -259,7 +259,8 @@ class OnlineAdaptator_task():
         min_adaptation_count = 0
         max_replay_num = 5 # Maximum number of bins to consider for replay
         loss_threshold = 1.0 # Loss threshold to accept a training step
-        replay_threshold = 2.5 # RMSE threshold (%) to include a bin in the replay buffer
+        replay_threshold_lower = 2.5 # RMSE threshold (%) to include a bin in the replay buffer
+        replay_threshold_upper = 20
 
         # Main loop to wait for data and fine-tune
         while True:
@@ -362,18 +363,19 @@ class OnlineAdaptator_task():
 
                 # Select top-k highest RMSE bins
                 k = min(max_replay_num, len(positive_bins))  # Choose up to 4
-                top_k_bins = sorted(positive_bins, key=lambda x: rmse_bins[x[0]][x[1]][x[2]], reverse=True)[:k]
-                print(f"Adaptation Worker: Top {k} bins: {top_k_bins} / {len(positive_bins)}")
+                top_bins = sorted(positive_bins, key=lambda x: rmse_bins[x[0]][x[1]][x[2]], reverse=True)
+                print(f"Adaptation Worker: Top {k} bins: {top_bins} / {len(positive_bins)}")
                 
                 # Add bins to replay buffer only if their RMSE is above a threshold
                 bins_for_replay = []
                 train_loader_combined_list = []
 
                 if replay_buffer_ON:
-                    for inc, spd, bin_idx in top_k_bins:
-                        if (replay_threshold < rmse_bins[inc][spd][bin_idx] < 15):
+                    for inc, spd, bin_idx in top_bins:
+                        if (replay_threshold_lower < rmse_bins[inc][spd][bin_idx] < replay_threshold_upper):
                             train_loader_combined_list.append(self.bin_loader[inc][spd][side][bin_idx])
                             bins_for_replay.append((inc, spd, bin_idx))
+                    bins_for_replay = bins_for_replay[:k]  # Limit to top-k bins
                 
                 # Add current task to the replay buffer if there is no misdetection
                 if not misdetection_flag:

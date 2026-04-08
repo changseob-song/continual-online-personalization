@@ -309,11 +309,11 @@ class OnlineAdaptator_PC():
         min_adaptation_count = 0
         max_replay_num = 5 # Maximum number of bins to consider for replay
         loss_threshold = 1.0 # Loss threshold to accept a training step
-        replay_threshold = 2.5 # RMSE threshold (%) to include a bin in the replay buffer
+        replay_threshold_lower = 2.5 # RMSE threshold (%) to include a bin in the replay buffer
+        replay_threshold_upper = 20
 
         grid_resolution = 2
         cadence_resolution = 10
-        # grid_resolution = 10
 
         # Main loop to wait for data and fine-tune
         while True:
@@ -403,19 +403,22 @@ class OnlineAdaptator_PC():
                 # 7. Select top-k highest RMSE bins
                 bin_size = len(self.bin_grid[side])
                 k = min(max_replay_num, bin_size)  # Choose up to 4
-                print(bin_size, max_replay_num, k)
-                top_k_bins = sorted(range(bin_size), key=lambda x: bin_rmse[x], reverse=True)[:k]
+                top_bins = sorted(range(bin_size), key=lambda x: bin_rmse[x], reverse=True)
+                print(bin_size, max_replay_num, k, len(top_bins))
                 
                 # 8. Add bins to replay buffer only if their RMSE is above a threshold
                 bins_for_replay = []
                 train_loader_combined_list = []
 
                 if replay_buffer_ON:
-                    for bin_idx in top_k_bins:
-                        if (replay_threshold < bin_rmse[bin_idx] < 15):
+                    for bin_idx in top_bins:
+                        if (replay_threshold_lower < bin_rmse[bin_idx] < replay_threshold_upper):
                             train_loader_combined_list.append(self.bin_loader[side][bin_idx])
                             bins_for_replay.append(bin_idx)
-                    print(f"Adaptation Worker: Replaying bins with RMSE > {replay_threshold}%: {bins_for_replay}")
+                        else:
+                            print(f"Adaptation Worker: Skipping bin {bin_idx} with RMSE {bin_rmse[bin_idx]:.2f} (threshold: {replay_threshold_lower}% - {replay_threshold_upper}%)")
+                    bins_for_replay = bins_for_replay[:k]  # Limit to top-k bins
+                    print(f"Adaptation Worker: Replaying bins with RMSE > {replay_threshold_lower}%: {bins_for_replay}")
 
                 # Add the current task data to the replay if no misdetection
                 if not misdetection_flag :
