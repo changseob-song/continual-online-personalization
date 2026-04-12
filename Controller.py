@@ -445,6 +445,7 @@ class Controller:
                 "start_idx_R": start_idx_R,
                 "loop_index": loop_index,
                 "loop_time_exceeded": loop_time_exceeded,
+                "gp_inference": (gp_loop_index-loop_index),
             }
             self.teleplot.sendBatchTelemetry(telemetry_data)
 
@@ -462,6 +463,16 @@ class Controller:
         # Apply zero torque to the motors
         self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_L, 0)
         self.Exo.mtr_comms.set_torque(self.Exo.CAN_id_R, 0)
+
+        self.gait_phase_input_q.put(None)   # poison pill
+        self.gait_phase_inference_process.join(timeout=5)
+        if self.gait_phase_inference_process.is_alive():
+            self.gait_phase_inference_process.terminate()
+            self.gait_phase_inference_process.join()
+        self.gait_phase_input_q.close();  self.gait_phase_input_q.join_thread()
+        self.gait_phase_output_q.close(); self.gait_phase_output_q.join_thread()
+
+        self.online_adaptator.stop_worker()  # already uses poison pill + join
 
         cleanup_can(self.Exo.bus, self.Exo.notifier)
         self.GPIO_control.safe_gpio_cleanup()

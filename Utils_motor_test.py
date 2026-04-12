@@ -17,7 +17,7 @@ import time
 # KD_MIN = 0
 # KD_MAX = 5.0
 
-ID = 2 # 1: left, 2: right
+ID = 1 # 1: left, 2: right
 
 cmd_torque = 0.0  # Nm
 cmd_position = 0.0  # rad

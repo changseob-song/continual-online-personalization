@@ -9,13 +9,11 @@ if __name__ == '__main__':
     # Garbage collection & clearing GPU cache
     gc.collect()
     torch.cuda.empty_cache()
-    # os.system("sudo sync; sudo sysctl -w vm.drop_caches=3")
-    os.system("fuser -k -9 /dev/nvhost-gpu >/dev/null 2>&1")
-    os.system("fuser -k -9 /dev/nvhost-ctrl-gpu >/dev/null 2>&1")
+    os.system("sudo sync; sudo sysctl -w vm.drop_caches=3")
     time.sleep(1)
-    
-    # Trial setting
-    subject = 'SK_Amy'
+
+# Trial setting
+    subject = 'test_CS'
     condition = 'pc_buffer'
 
     # Condition
@@ -31,8 +29,8 @@ if __name__ == '__main__':
         # '4_1': 'RA_fast',
         # '5_1': 'RD_slow',
         # '6_1': 'RD_fast',
-        # '7_1': 'LG_slow',
-        # '8_1': 'LG_fast',
+        '7_1': 'LG_slow',
+        '8_1': 'LG_fast',
         '8_2': 'RA_slow',
         '8_3': 'RA_fast',
         '8_4': 'RD_slow',
@@ -46,7 +44,7 @@ if __name__ == '__main__':
     }
 
     # Body mass setting
-    body_mass_kg = 52  # kg
+    body_mass_kg = 50  # kg
     # Trigger setting
     trigger_type = "mocap"  # "mocap" or "typing"
     # Exo setting

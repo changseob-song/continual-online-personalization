@@ -17,6 +17,11 @@ def upsampling(data, target_length):
     Upsample a 1D numpy array to the desired target length using linear interpolation.
     """
     original_length = len(data)
+    if original_length == 0:
+        raise ValueError("upsampling received empty data")
+    if original_length == 1:
+        return np.full(target_length, data[0], dtype=float)
+
     original_indices = np.linspace(0, original_length - 1, original_length)
     new_indices = np.linspace(0, original_length - 1, target_length)
 
@@ -59,6 +64,13 @@ def pca_transform_reconstruction(input_data, mid_peak_idx, pca_matrix, pca_mean,
     # Prepare the pca input
     if isinstance(mid_peak_idx, (np.ndarray, list)):
         mid_peak_idx = int(mid_peak_idx[0])
+
+    if input_data is None or getattr(input_data, "ndim", 0) != 2:
+        raise ValueError("invalid input_data shape for PCA transform")
+    if input_data.shape[0] <= 1:
+        raise ValueError("input_data is too short for PCA transform")
+    if mid_peak_idx <= 0 or mid_peak_idx >= input_data.shape[0]:
+        raise ValueError(f"invalid mid_peak_idx: {mid_peak_idx} for length {input_data.shape[0]}")
     
     input_length_1 = mid_peak_idx
     input_length_2 = input_data.shape[0] - mid_peak_idx # input data shape : (length, channel num)
@@ -158,7 +170,7 @@ class OnlineAdaptator_PC():
         """Sends a shutdown signal to the worker process."""
         self.input_q.put((None, None, None, None, None, None))  # Send shutdown signal
 
-        self.adaptation_process.join(timeout=1)
+        self.adaptation_process.join(timeout=30)
         if self.adaptation_process.is_alive():
             self.adaptation_process.terminate()
             self.adaptation_process.join()
@@ -225,15 +237,6 @@ class OnlineAdaptator_PC():
         pca_matrix = pca_file['pca_matrix']  # shape: (original_dim, reduced_dim))
         pca_mean = pca_file['scaler_mean']      # shape: (original_dim,)
         pca_scale = pca_file['scaler_scale']    # shape: (original_dim,)
-
-        checkpoint = torch.load(encoder_model_path, map_location=device, weights_only=True)
-
-        encoder = Autoencoder(
-            input_dim=100,
-            hidden_dim=64,
-            latent_dim=2
-        ).to(device)
-        encoder.load_state_dict(checkpoint["model_state_dict"])
 
         # 1. Initialize models inside the worker
         model_L = TCN(hyperparam_config).to(device)
@@ -307,7 +310,7 @@ class OnlineAdaptator_PC():
         
         min_adaptation_before_replay = 4 # Minimum number of adaptation steps before starting replay
         min_adaptation_count = 0
-        max_replay_num = 5 # Maximum number of bins to consider for replay
+        max_replay_num = 4 # Maximum number of bins to consider for replay
         loss_threshold = 1.0 # Loss threshold to accept a training step
         replay_threshold_lower = 2.5 # RMSE threshold (%) to include a bin in the replay buffer
         replay_threshold_upper = 20
@@ -331,11 +334,25 @@ class OnlineAdaptator_PC():
                 # Determine either left or right side
                 side, incline, speed, input_data, mid_peak_idx, end_idx  = msg
 
+                # Skip malformed payloads instead of crashing the worker.
+                if input_data is None or getattr(input_data, "ndim", 0) != 2 or input_data.shape[0] <= 1:
+                    print(f"Adaptation Worker: Skipping invalid input_data. shape={getattr(input_data, 'shape', None)}")
+                    continue
+
+                mid = int(mid_peak_idx[0]) if isinstance(mid_peak_idx, (np.ndarray, list)) else int(mid_peak_idx)
+                if mid <= 0 or mid >= input_data.shape[0]:
+                    print(f"Adaptation Worker: Skipping invalid mid_peak_idx={mid} for input_len={input_data.shape[0]}")
+                    continue
+
                 model = model_R if side == 'R' else model_L
                 optimizer = optimizer_R if side == 'R' else optimizer_L
 
                 # 1. Go through PCA transformation
-                input_data_reduced, reconstruction_error_scaled = pca_transform_reconstruction(input_data, mid_peak_idx, pca_matrix, pca_mean, pca_scale)
+                try:
+                    input_data_reduced, reconstruction_error_scaled = pca_transform_reconstruction(input_data, mid_peak_idx, pca_matrix, pca_mean, pca_scale)
+                except ValueError as e:
+                    print(f"Adaptation Worker: Skipping sample due to PCA input error: {e}")
+                    continue
                 # input_data_reduced, reconstruction_error_scaled = encoder_reconstruction(input_data, mid_peak_idx, encoder)
                 print(f"Adaptation Worker: PCA transformation done. Reconstruction error (scaled): {reconstruction_error_scaled:.2f}")
 
@@ -346,6 +363,8 @@ class OnlineAdaptator_PC():
                 else:
                     misdetection_flag = False
                 
+                print(f"Time (reconstruction): {time.time() - start_time:.2f} seconds")
+
                 if not misdetection_flag:
 
                     # 3. Prepare the data loader for the current task
@@ -378,7 +397,6 @@ class OnlineAdaptator_PC():
                             self.bin_mid_idx[side][existing_idx] = mid_peak_idx
                             self.bin_loader[side][existing_idx] = train_loader_current_task
 
-
                 # 6. Compute RMSE for all bins in the replay buffer
                 with torch.no_grad(): # Disable gradient calculation for inference
 
@@ -400,6 +418,9 @@ class OnlineAdaptator_PC():
                         bin_rmse.append(rmse_monitoring(model, full_loader, device))
                         # print(f"Adaptation Worker monitoring: {side} - {bin_idx}: {bin_rmse[bin_idx]:.2f} (RMSE)")
                 
+                print(f"Time (rmse calc): {time.time() - start_time:.2f} seconds")
+
+
                 # 7. Select top-k highest RMSE bins
                 bin_size = len(self.bin_grid[side])
                 k = min(max_replay_num, bin_size)  # Choose up to 4
@@ -409,15 +430,16 @@ class OnlineAdaptator_PC():
                 # 8. Add bins to replay buffer only if their RMSE is above a threshold
                 bins_for_replay = []
                 train_loader_combined_list = []
+                replay_count = 0
 
                 if replay_buffer_ON:
                     for bin_idx in top_bins:
-                        if (replay_threshold_lower < bin_rmse[bin_idx] < replay_threshold_upper):
+                        if (replay_threshold_lower < bin_rmse[bin_idx] < replay_threshold_upper) and (replay_count < k):
                             train_loader_combined_list.append(self.bin_loader[side][bin_idx])
                             bins_for_replay.append(bin_idx)
-                        else:
-                            print(f"Adaptation Worker: Skipping bin {bin_idx} with RMSE {bin_rmse[bin_idx]:.2f} (threshold: {replay_threshold_lower}% - {replay_threshold_upper}%)")
-                    bins_for_replay = bins_for_replay[:k]  # Limit to top-k bins
+                            replay_count += 1
+                        # else:
+                        #     print(f"Adaptation Worker: Skipping bin {bin_idx} with RMSE {bin_rmse[bin_idx]:.2f} (threshold: {replay_threshold_lower}% - {replay_threshold_upper}%)")
                     print(f"Adaptation Worker: Replaying bins with RMSE > {replay_threshold_lower}%: {bins_for_replay}")
 
                 # Add the current task data to the replay if no misdetection
@@ -448,6 +470,9 @@ class OnlineAdaptator_PC():
 
                     min_adaptation_count += 1
                         
+                print(f"Time (adaptation): {time.time() - start_time:.2f} seconds")
+
+
                 # After training, get the updated weights and send them back
                 updated_weights = model.linear.weight.data.clone().cpu().numpy()
                 updated_biases = model.linear.bias.data.clone().cpu().numpy()
