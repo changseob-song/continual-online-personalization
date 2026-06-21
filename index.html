@@ -124,20 +124,16 @@
         <div class="container is-max-desktop">
           <div class="columns is-centered">
             <div class="column has-text-centered">
-              <p class="eyebrow">arXiv 2606.17455v1 · Robotics · June 16, 2026</p>
               <h1 class="title is-1 publication-title">Continual Online Personalization of Exoskeleton Control via Manifold-Aware Experience Replay</h1>
-              <p class="hero-summary">
-                A replay-based online adaptation framework that preserves user-specific exoskeleton behavior across diverse locomotor tasks without requiring explicit task labels.
-              </p>
 
               <div class="is-size-5 publication-authors">
-                <span class="author-block"><a href="mailto:changseob@cmu.edu">Changseob Song</a></span>
+                <span class="author-block"><a href="https://changseob-song.github.io/">Changseob Song</a></span>
                 <span class="author-separator">·</span>
-                <span class="author-block">Inseung Kang</span>
+                <span class="author-block"><a href="https://scholar.google.com/citations?hl=en&user=jcgAPTYAAAAJ/">Inseung Kang</span>
               </div>
 
               <div class="publication-affiliations">
-                Department of Mechanical Engineering, Carnegie Mellon University
+                Carnegie Mellon University
               </div>
 
               <div class="publication-links">
@@ -153,12 +149,7 @@
                     <span>arXiv</span>
                   </a>
                 </span>
-                <span class="link-block">
-                  <a href="https://github.com/changseob-song/continual-online-personalization" target="_blank" class="external-link button is-normal is-rounded is-dark">
-                    <span class="icon"><i class="fab fa-github"></i></span>
-                    <span>Website Repo</span>
-                  </a>
-                </span>
+
               </div>
             </div>
           </div>
@@ -170,11 +161,8 @@
       <div class="container is-max-desktop">
         <div class="hero-visual-card">
           <video poster="" autoplay controls muted loop playsinline preload="metadata">
-            <source src="static/videos/banner_video.mp4" type="video/mp4">
+            <source src="https://youtu.be/S8qU5yyd-wA" type="video/mp4">
           </video>
-          <p class="visual-caption">
-            Real-time hip exoskeleton personalization across locomotor transitions, with continual adaptation stabilized by manifold-aware replay.
-          </p>
         </div>
       </div>
     </section>
@@ -182,15 +170,11 @@
     <section class="section section-anchor" id="abstract">
       <div class="container is-max-desktop">
         <div class="section-heading">
-          <p class="section-kicker">Overview</p>
           <h2 class="title is-3">Abstract</h2>
         </div>
         <div class="content lead-content">
           <p>
-            Personalizing exoskeleton control remains a central challenge for clinical users with gait disabilities. This work introduces a manifold-aware experience replay framework for online adaptation that preserves previously learned locomotor contexts while adapting in real time to subject variability, device fit, and task changes.
-          </p>
-          <p>
-            The framework organizes replay data in a gait latent space, eliminating the need for explicit task labels when selecting prior experiences to revisit. In experiments with emulated hemiplegic gait across speed and incline transitions, the proposed method improved torque tracking accuracy by 40% and gait phase tracking accuracy by 60% compared with a baseline adaptation method without replay.
+            Personalizing exoskeleton control remains a critical challenge for clinical users with gait disabilities. Online adaptation (OA) offers an effective solution by adapting in real time to subject variability, device fit, and diverse locomotor tasks. However, OA involves a continual stream of user state data, which can lead to catastrophic forgetting of previously learned locomotor contexts. Here, we develop a manifold-aware experience replay-based online personalization framework designed to maintain user-specific representations across diverse tasks during OA of exoskeleton control. By replaying previously experienced tasks from a replay buffer, we preserve the personalized exoskeleton assistance across all learned tasks. Furthermore, we capture a gait manifold that distinguishes between different locomotor tasks, removing the need for explicit task labeling when selecting target replay bins. We evaluated our framework on emulated hemiplegic gait, which largely deviates from able-bodied patterns, across multiple forgetting scenarios with speed and incline transitions. Our manifold-aware replay framework achieved 40% and 60% improvements in torque and gait phase tracking accuracy, respectively, compared to a baseline framework without replay, which exhibited catastrophic forgetting during task transitions. This demonstrates that our proposed framework personalizes exoskeleton control in real time across diverse locomotor contexts in daily ambulation of clinical populations.
           </p>
         </div>
       </div>
@@ -199,7 +183,6 @@
     <section class="section is-light section-anchor" id="highlights">
       <div class="container is-max-desktop">
         <div class="section-heading">
-          <p class="section-kicker">Key contributions</p>
           <h2 class="title is-3">Why this matters</h2>
         </div>
         <div class="columns is-multiline feature-grid">
@@ -207,14 +190,14 @@
             <div class="feature-card">
               <div class="feature-icon"><i class="fas fa-rotate"></i></div>
               <h3>Continual online adaptation</h3>
-              <p>Updates the gait phase estimator in real time so assistance timing remains personalized as the user and task change.</p>
+              <p>Updates the gait phase estimator in real time with sparse sensors, so assistance timing remains personalized as the user and task change.</p>
             </div>
           </div>
           <div class="column is-4-desktop is-12-mobile">
             <div class="feature-card">
               <div class="feature-icon"><i class="fas fa-project-diagram"></i></div>
               <h3>Task-aware replay without labels</h3>
-              <p>Uses a gait manifold to group similar locomotor states, avoiding hand-crafted task labels during replay selection.</p>
+              <p>Uses a gait manifold to group similar locomotor states, avoiding explicit task labels during replay selection.</p>
             </div>
           </div>
           <div class="column is-4-desktop is-12-mobile">
@@ -231,33 +214,16 @@
     <section class="section section-anchor" id="method">
       <div class="container is-max-desktop">
         <div class="section-heading">
-          <p class="section-kicker">Method</p>
           <h2 class="title is-3">Framework at a glance</h2>
         </div>
-        <div class="columns method-columns">
-          <div class="column is-6-desktop">
-            <div class="method-card">
-              <h3>System setup</h3>
-              <ul>
-                <li>4.5 kg bilateral robotic hip exoskeleton with up to 22 N·m sagittal-plane torque.</li>
-                <li>100 Hz control loop on an NVIDIA Jetson Orin Nano edge controller.</li>
-                <li>Deep gait phase estimator using bilateral hip encoder signals as input.</li>
-                <li>Torque commands generated from gait phase and task-specific control splines.</li>
-              </ul>
-            </div>
-          </div>
-          <div class="column is-6-desktop">
-            <div class="method-card">
-              <h3>Online adaptation logic</h3>
-              <ul>
-                <li>Adapts every third heel strike using two gait cycles of recent user data.</li>
-                <li>Freezes the high-level TCN feature extractor and updates only the final linear layer.</li>
-                <li>Builds a gait manifold from principal components plus gait cycle duration.</li>
-                <li>Selects the top four replay bins based on current RMSE to balance stability and latency.</li>
-              </ul>
-            </div>
-          </div>
-        </div>
+
+        <figure class="image method-figure mb-5">
+          <img src="static/images/OA_framework.png" alt="Overview of the manifold-aware online adaptation framework">
+          <figcaption class="has-text-centered mt-2">
+            The manifold-aware experience replay framework for online adaptation (OA) consists of a latent-space replay buffer (blue), an OA module (red), and a main control loop (black) that predicts gait phase from sensor inputs to command torque via mid-level control splines. Every third heel strike, the OA module uses two gait cycles of data to generate synchronized phase labels and updates only the final linear layer weights of a temporal convolutional network (TCN) while keeping preceding blocks frozen. To prevent catastrophic forgetting, the framework saves and dynamically updates the user's gait manifold in the replay buffer, monitoring estimation accuracy across all experienced conditions to combine the current task with data from the top four lowest-accuracy tasks for retraining.
+          </figcaption>
+        </figure>
+
       </div>
     </section>
 
