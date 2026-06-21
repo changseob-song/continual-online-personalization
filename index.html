@@ -158,16 +158,11 @@
     </section>
 
     <section class="section hero-visual-section">
-      <!-- Changed is-max-desktop to is-fluid -->
-      <div class="container is-fluid" style="max-width: 90%;"> 
+      <div class="container is-max-desktop">
         <div class="hero-visual-card">
-          <iframe
-            src="https://www.youtube.com/embed/S8qU5yyd-wA"
-            title="Project overview video"
-            frameborder="0"
-            allow="autoplay; encrypted-media; picture-in-picture"
-            allowfullscreen>
-          </iframe>
+          <video autoplay controls muted loop playsinline preload="metadata">
+            <source src="src/video/TRL_video_comp.mp4" type="video/mp4">
+          </video>
         </div>
       </div>
     </section>
@@ -222,7 +217,7 @@
           <h2 class="title is-3">Framework at a glance</h2>
         </div>
 
-        <figure class="image method-figure mb-5">
+        <figure class="image method-figure mb-5" style="max-width: 75%; margin: 0 auto;">
           <img src="/continual-online-personalization/static/images/OA_framework.png">
           <figcaption class="has-text-centered mt-2">
             The manifold-aware experience replay framework for online adaptation (OA) consists of a latent-space replay buffer (blue), an OA module (red), and a main control loop (black) that predicts gait phase from sensor inputs to command torque via mid-level control splines. Every third heel strike, the OA module uses two gait cycles of data to generate synchronized phase labels and updates only the final linear layer weights of a temporal convolutional network while keeping preceding blocks frozen. To prevent catastrophic forgetting, the framework saves and dynamically updates the user's gait manifold in the replay buffer, monitoring estimation accuracy across all experienced conditions to combine the current task with data from the top four lowest-accuracy tasks for retraining.
