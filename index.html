@@ -129,7 +129,7 @@
               <div class="is-size-5 publication-authors">
                 <span class="author-block"><a href="https://changseob-song.github.io/">Changseob Song</a></span>
                 <span class="author-separator">·</span>
-                <span class="author-block"><a href="https://scholar.google.com/citations?hl=en&user=jcgAPTYAAAAJ/">Inseung Kang</span>
+                <span class="author-block"><a href="https://scholar.google.com/citations?user=jcgAPTYAAAAJ&hl=ko">Inseung Kang</span>
               </div>
 
               <div class="publication-affiliations">
@@ -160,9 +160,13 @@
     <section class="section hero-visual-section">
       <div class="container is-max-desktop">
         <div class="hero-visual-card">
-          <video poster="" autoplay controls muted loop playsinline preload="metadata">
-            <source src="https://youtu.be/S8qU5yyd-wA" type="video/mp4">
-          </video>
+          <iframe
+            src="https://www.youtube.com/embed/S8qU5yyd-wA"
+            title="Project overview video"
+            frameborder="0"
+            allow="autoplay; encrypted-media; picture-in-picture"
+            allowfullscreen>
+          </iframe>
         </div>
       </div>
     </section>
@@ -218,9 +222,9 @@
         </div>
 
         <figure class="image method-figure mb-5">
-          <img src="static/images/OA_framework.png" alt="Overview of the manifold-aware online adaptation framework">
+          <img src="/continual-online-personalization/static/images/OA_framework.png" alt="Overview of the manifold-aware online adaptation framework">
           <figcaption class="has-text-centered mt-2">
-            The manifold-aware experience replay framework for online adaptation (OA) consists of a latent-space replay buffer (blue), an OA module (red), and a main control loop (black) that predicts gait phase from sensor inputs to command torque via mid-level control splines. Every third heel strike, the OA module uses two gait cycles of data to generate synchronized phase labels and updates only the final linear layer weights of a temporal convolutional network (TCN) while keeping preceding blocks frozen. To prevent catastrophic forgetting, the framework saves and dynamically updates the user's gait manifold in the replay buffer, monitoring estimation accuracy across all experienced conditions to combine the current task with data from the top four lowest-accuracy tasks for retraining.
+            The manifold-aware experience replay framework for online adaptation (OA) consists of a latent-space replay buffer (blue), an OA module (red), and a main control loop (black) that predicts gait phase from sensor inputs to command torque via mid-level control splines. Every third heel strike, the OA module uses two gait cycles of data to generate synchronized phase labels and updates only the final linear layer weights of a temporal convolutional network while keeping preceding blocks frozen. To prevent catastrophic forgetting, the framework saves and dynamically updates the user's gait manifold in the replay buffer, monitoring estimation accuracy across all experienced conditions to combine the current task with data from the top four lowest-accuracy tasks for retraining.
           </figcaption>
         </figure>
 
