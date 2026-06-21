@@ -160,7 +160,7 @@
     <section class="section hero-visual-section">
       <div class="container is-max-desktop">
         <div class="hero-visual-card">
-          <video autoplay controls muted loop playsinline preload="metadata">
+          <video controls loop playsinline preload="metadata">
             <source src="/continual-online-personalization/static/videos/TRL_video_comp.mp4" type="video/mp4">
           </video>
         </div>
@@ -229,13 +229,43 @@
     <section class="section section-anchor" id="method">
       <div class="container is-max-desktop">
         <div class="section-heading">
-          <h2 class="title is-3">Framework at a glance</h2>
+          <h2 class="title is-3">Exoskeleton HW & SW</h2>
         </div>
 
         <figure class="image method-figure mb-5" style="max-width: 75%; margin: 0 auto;">
-          <img src="/continual-online-personalization/static/images/OA_framework.png">
+          <img src="/continual-online-personalization/static/images/Exo_HW_SW.png">
           <figcaption class="has-text-centered mt-2">
-            The manifold-aware experience replay framework for online adaptation (OA) consists of a latent-space replay buffer (blue), an OA module (red), and a main control loop (black) that predicts gait phase from sensor inputs to command torque via mid-level control splines. Every third heel strike, the OA module uses two gait cycles of data to generate synchronized phase labels and updates only the final linear layer weights of a temporal convolutional network while keeping preceding blocks frozen. To prevent catastrophic forgetting, the framework saves and dynamically updates the user's gait manifold in the replay buffer, monitoring estimation accuracy across all experienced conditions to combine the current task with data from the top four lowest-accuracy tasks for retraining.
+            Robotic hip exoskeleton designed to assist the user’s bilateral hip motion. Real-time control flow within the edge controller unit with inter-process communication between parallel software modules (dashed line) and peripheral communication between the controller’s I/O process and the physical actuators (solid line). Black shaded boxes show GPU-accelerated processes, and the white box indicates a CPU-centric process. Spline profiles for different walking inclines and speeds. This mid-level spline profile maps high-level gait phase into low-level torque command.
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section section-anchor" id="method">
+      <div class="container is-max-desktop">
+        <div class="section-heading">
+          <h2 class="title is-3">Hemiplegic gait emulation</h2>
+        </div>
+
+        <figure class="image method-figure mb-5" style="max-width: 75%; margin: 0 auto;">
+          <img src="/continual-online-personalization/static/images/Hemiplegic_gait.png">
+          <figcaption class="has-text-centered mt-2">
+            Hemiplegic gait was emulated using metronome cue and knee brace. This caused temporal asymmetry of user's gait, as well as kinematic asymmetry.
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section section-anchor" id="method">
+      <div class="container is-max-desktop">
+        <div class="section-heading">
+          <h2 class="title is-3">Hemiplegic gait emulation</h2>
+        </div>
+
+        <figure class="image method-figure mb-5" style="max-width: 75%; margin: 0 auto;">
+          <img src="/continual-online-personalization/static/images/Hemiplegic_gait.png">
+          <figcaption class="has-text-centered mt-2">
+            Hemiplegic gait was emulated using metronome cue and knee brace. This caused temporal asymmetry of user's gait, as well as kinematic asymmetry.
           </figcaption>
         </figure>
       </div>
@@ -260,14 +290,13 @@
             <span class="stat-label">average update latency after replay stabilizes</span>
           </div>
         </div>
-        <div class="content lead-content compact">
-          <p>
-            The proposed framework was evaluated on emulated hemiplegic gait with six locomotor tasks spanning level ground, ramp ascent, and ramp descent at multiple speeds. Both methods began with large errors on the first unseen task, but the manifold-aware method converged to lower error across the personalization phase and remained significantly more stable in forgetting scenarios.
-          </p>
-          <p>
-            The strongest benefits appeared in transitions involving speed changes, where baseline online adaptation was more prone to overfit to the current task and lose prior behavior.
-          </p>
-        </div>
+
+        <figure class="image method-figure mb-5" style="max-width: 100%; margin: 0 auto;">
+          <img src="/continual-online-personalization/static/images/Main_results.png">
+          <figcaption class="has-text-centered mt-2">
+            After the subjects experienced each task (personalizing phase), they walked for 5 minutes for a single task (forgetting phase). When tested on different tasks other than the forgetting task (testing phase), significant decrease in both torque and gait phase tracking errors were observed for all task transitions.
+          </figcaption>
+        </figure>
       </div>
     </section>
 
