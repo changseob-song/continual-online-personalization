@@ -23,8 +23,8 @@ sweep_config = {
 # Base hyperparameters
 hyperparam_config = {
     'wandb_project_name': 'online_adaptation-GPE',
-    'wandb_session_name': 'hyperparam_optimized-input_modality_6',  # sweep-, 2. SK, 3. AB+SK
-    'input_size': 6, # 12 for IMU (Pelvis, one thigh), 2 for hip angle and velocity
+    'wandb_session_name': 'motor_bilateral_pos_LGonly',  # sweep-, 2. SK, 3. AB+SK
+    'input_size': 2, # 2 for right and left sides of pos
     'output_size': 2, # 2 for polar coordinates (x, y) of gait cycle
     'architecture': 'TCN',
     
@@ -40,7 +40,7 @@ hyperparam_config = {
     'num_channels': [80, 80, 80, 80, 80],
     'kernel_size': 5,
     'dropout': 0.05,
-    'init_lr': 5e-6,
+    'init_lr': 1e-6,
     'batch_size': 16,
 
     'number_of_workers': 10,
@@ -80,17 +80,18 @@ def train():
     
     # Load pretrained model if transfer learning is enabled
     if hyperparam_config['transfer_learning']:
-        pretrained_model_path = '/home/metamobility5/Changseob/biotorque/training_result/baseline_TCN'
-        model.load_state_dict(torch.load(os.path.join(pretrained_model_path, 'baseline_TCN.pt'), map_location=device))
+        pretrained_model_path = '/home/metamobility5/Changseob/proj-online_adaptation_GPE/training_results/heel_strike-RD_flipped-bilateral'
+        model.load_state_dict(torch.load(os.path.join(pretrained_model_path, 'heel_strike-RD_flipped-bilateral.pt'), map_location=device))
         print("\nPretrained model loaded: ", pretrained_model_path)
         #Freeze the TCN part of the model
-        for param in model.tcn.parameters():
-            param.requires_grad = False
+        # for param in model.tcn.parameters():
+        #     param.requires_grad = False
     else:
         pretrained_model_path = None
 
     # Initialize DataHandler
-    data_root = '/home/metamobility5/Changseob/dataset-MeMo/Synced_LGRARD'
+    data_root = '/home/metamobility5/Changseob/dataset-MeMo/Synced_LGRARD' # base dataset
+    # data_root = '/home/metamobility5/Changseob/dataset-MeMo/Synced_GPE_dataset' # For fine-tuning
     data_handler = DataHandler(data_root, hyperparam_config, pretrained_model_path)
     data_handler.load_data(
         train_data_partition=[
@@ -99,26 +100,21 @@ def train():
                         'AB03_Amy',
                         'AB04_Changseob',
                         'AB05_Maria',
-                        # 'AB06_Vaidehi',
                         'AB07_Leo',
                         'AB08_Adrian',
-                        # 'AB09_Crystal',
-                        # 'AB10_Pragya',
                         'AB11_Ryan',
                         'AB12_Ray',
                         'AB13_Hridayam',
                         'AB14_Evy',
         ],
         train_data_condition=[
-                        # '0mps', 
-                        '0p2mps', '0p4mps', '0p6mps', '0p8mps', '1p0mps', '1p2mps', '1p4mps', #'transient_15sec', 'transient_30sec',
+                        '0p2mps', '0p4mps', '0p6mps', '0p8mps', '1p0mps', '1p2mps', '1p4mps', 'transient_15sec', 'transient_30sec',
         ],
         test_data_partition=[
                         'AB01_Jimin'
         ],
         test_data_condition=[
-                        #'0mps',
-                        '0p2mps', '0p4mps', '0p6mps', '0p8mps', '1p0mps', '1p2mps', '1p4mps', #'transient_15sec', 'transient_30sec',
+                        '0p2mps', '0p4mps', '0p6mps', '0p8mps', '1p0mps', '1p2mps', '1p4mps', 'transient_15sec', 'transient_30sec',
         ]
     )
     data_handler.save_mean_std(save_dir)

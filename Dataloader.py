@@ -164,65 +164,62 @@ class LoadData(torch.utils.data.Dataset):
                     label_file_names = sorted(os.listdir(label_file_dir))
 
                     # Load and concatenate all input data files
-                    input_buffer_R = None
-                    input_buffer_L = None
+                    input_buffer_R, input_buffer_L = None, None
 
                     for i, name in enumerate(input_file_names):
                         csv_path = os.path.join(input_file_dir, name)
 
-                        # Extract IMU data from input file
-                        if 'imu' in name.lower():
-                            # Right side
-                            input_df_R = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
-                                # 'Pelvis_Acc_X', 'Pelvis_Acc_Y', 'Pelvis_Acc_Z', 'Pelvis_Gyr_X', 'Pelvis_Gyr_Y', 'Pelvis_Gyr_Z',
-                                'Thigh_R_Acc_X', 'Thigh_R_Acc_Y', 'Thigh_R_Acc_Z', 'Thigh_R_Gyr_X', 'Thigh_R_Gyr_Y', 'Thigh_R_Gyr_Z',
-                                # 'Thigh_L_Acc_X', 'Thigh_L_Acc_Y', 'Thigh_L_Acc_Z', 'Thigh_L_Gyr_X', 'Thigh_L_Gyr_Y', 'Thigh_L_Gyr_Z' # for bilateral input to unilateral output
-                                ]].values
-                            # Left side
-                            input_df_L = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
-                                # 'Pelvis_Acc_X', 'Pelvis_Acc_Y', 'Pelvis_Acc_Z', 'Pelvis_Gyr_X', 'Pelvis_Gyr_Y', 'Pelvis_Gyr_Z',
-                                'Thigh_L_Acc_X', 'Thigh_L_Acc_Y', 'Thigh_L_Acc_Z', 'Thigh_L_Gyr_X', 'Thigh_L_Gyr_Y', 'Thigh_L_Gyr_Z',
-                                # 'Thigh_R_Acc_X', 'Thigh_R_Acc_Y', 'Thigh_R_Acc_Z', 'Thigh_R_Gyr_X', 'Thigh_R_Gyr_Y', 'Thigh_R_Gyr_Z'  # for unilateral input to unilateral output
-                                ]].values
-                            # Left side: Flip the signs of 
-                                # Pelvis_Acc_Y, Pelvis_Gyr_X, Pelvis_Gyr_Z, 
-                                # Thigh_L_Acc_Y, Thigh_L_Gyr_X, Thigh_L_Gyr_Z,
-                            # input_df_L[:, [1, 3, 5, 7, 9, 11]] *= -1
-                            input_df_L[:, [1, 3, 5]] *= -1 # When only using Thigh IMU
+                        # # Extract IMU data from input file
+                        # if 'imu' in name.lower():
+                        #     # Right side
+                        #     input_df_R = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
+                        #         'Thigh_R_Gyr_Y', 'Thigh_L_Gyr_Y', # Only use Y-axis gyroscope data for GPE
+                        #         # 'Thigh_R_Acc_X', 'Thigh_R_Acc_Y', 'Thigh_R_Acc_Z', 'Thigh_R_Gyr_X', 'Thigh_R_Gyr_Y', 'Thigh_R_Gyr_Z',
+                        #         # 'Thigh_L_Acc_X', 'Thigh_L_Acc_Y', 'Thigh_L_Acc_Z', 'Thigh_L_Gyr_X', 'Thigh_L_Gyr_Y', 'Thigh_L_Gyr_Z',
+                        #         ]].values
+                        #     # Left side
+                        #     input_df_L = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
+                        #         'Thigh_L_Gyr_Y', 'Thigh_R_Gyr_Y', # Only use Y-axis gyroscope data for GPE
+                        #         # 'Thigh_L_Acc_X', 'Thigh_L_Acc_Y', 'Thigh_L_Acc_Z', 'Thigh_L_Gyr_X', 'Thigh_L_Gyr_Y', 'Thigh_L_Gyr_Z',
+                        #         # 'Thigh_R_Acc_X', 'Thigh_R_Acc_Y', 'Thigh_R_Acc_Z', 'Thigh_R_Gyr_X', 'Thigh_R_Gyr_Y', 'Thigh_R_Gyr_Z',
+                        #         ]].values
+                        #     # Left side: Flip the signs of Y-axis accelration and X- and Z-axis gyroscope to match right side coordinate system
+                        #     # input_df_L[:, [1, 3, 5, 7, 9, 11]] *= -1
+                        #     # input_df_L[:, [1, 3, 5]] *= -1 # When only using Thigh IMU
 
                         # Extract motor data from input file
-                        elif 'motor' in name.lower():
+                        if 'motor' in name.lower():
                             # Right side
                             input_df_R = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
-                                'mtr_pos_R', #'mtr_vel_R'
+                                'mtr_pos_R', 'mtr_pos_L',
                                 ]].values
                             # Left side
                             input_df_L = pd.read_csv(csv_path, delimiter=',', on_bad_lines='skip')[[
-                                'mtr_pos_L', #'mtr_vel_L'
+                                'mtr_pos_L', 'mtr_pos_R'
                                 ]].values
-                            # Flip the signs of mtr_pos_R, mtr_vel_R to make flexion positive
-                            input_df_R[:, [0]] *= -1 # NOTE: this is only for hip angle
+                            # Flip the signs of mtr_pos_R to make flexion positive
+                            input_df_R[:, [0]] *= -1
+                            input_df_L[:, [1]] *= -1
+                
+                        elif 'imu' in name.lower(): # Skip IMU data for GPE training
+                            continue
 
-                            # Find extension peaks (local minima) by inverting the signal
-                            peak_indices_R, _ = find_peaks(-input_df_R[:,0], height= None, distance=15, prominence=10)
-                            peak_indices_L, _ = find_peaks(-input_df_L[:,0], height= None, distance=15, prominence=10)
-
-                            input_df_R, input_df_L = None, None  # Free up memory, for 6 input size
-
-                            if peak_indices_R.shape[0] == 0 or peak_indices_L.shape[0] == 0:
-                                print(f"Warning: No peaks detected in {name}. Skipping this file.")
-                                continue
-                        
-                        # # Horizontally stack all input data
+                        # Horizontally stack all input data
                         if input_buffer_R is None:    input_buffer_R = input_df_R
                         # else:   input_buffer_R = np.hstack((input_buffer_R, input_df_R))
                         if input_buffer_L is None:    input_buffer_L = input_df_L
                         # else:   input_buffer_L = np.hstack((input_buffer_L, input_df_L))
-                        
-                    # # Use only the data between the first and last peaks
-                    input_buffer_R = input_buffer_R[peak_indices_R[0]:peak_indices_R[-1], :] 
-                    input_buffer_L = input_buffer_L[peak_indices_L[0]:peak_indices_L[-1], :]
-                    
+
+                    if 'RD' in task: # flip right and left vGRF for RD task
+                        vGRF_L, vGRF_R = self.load_vGRF_data(os.path.join(label_file_dir, label_file_names[0]), record_time_sec=input_buffer_R.shape[0]//100)
+                    else: 
+                        vGRF_R, vGRF_L = self.load_vGRF_data(os.path.join(label_file_dir, label_file_names[0]), record_time_sec=input_buffer_R.shape[0]//100)
+                    heelstrike_indices_R, gait_cycles_R = self.extract_gc(vGRF_R, threshold=100)
+                    heelstrike_indices_L, gait_cycles_L = self.extract_gc(vGRF_L, threshold=100)
+
+                    input_buffer_L = input_buffer_L[heelstrike_indices_L[0]:heelstrike_indices_L[-1], :]
+                    input_buffer_R = input_buffer_R[heelstrike_indices_R[0]:heelstrike_indices_R[-1], :]
+
                     # Randomly select right or left side as the first column
                     R_side_first = np.random.randint(0, 2)
 
@@ -235,9 +232,9 @@ class LoadData(torch.utils.data.Dataset):
                     self.subject_data_length[subject_num] += input_buffer.shape[0]
 
                     # Load and label data file (Vicon data)
-                    label_buffer_R = self.gait_cycle_generator(peak_indices_R)
-                    label_buffer_L = self.gait_cycle_generator(peak_indices_L)
-                    
+                    label_buffer_R = self.gait_cycle_generator(heelstrike_indices_R)
+                    label_buffer_L = self.gait_cycle_generator(heelstrike_indices_L)
+
                     # Randomly select right or left side as the first column
                     if R_side_first == True:
                         label_buffer = np.vstack((label_buffer_R, label_buffer_L))
@@ -247,12 +244,7 @@ class LoadData(torch.utils.data.Dataset):
                     self.label_list.append(label_buffer)
 
                 for speed in os.listdir(task_path):
-                    if speed not in conditions:
-                        continue
-                    if task != 'LG' and speed not in ['0p4mps', '0p6mps', '0p8mps', '1p0mps']:
-                        continue
-                    if task == 'RD_10deg' and speed in ['0p4mps', '0p6mps']:
-                        continue
+                    if speed == '0mps': continue # skip standing trials for GPE
                     print(f"\tLoading -Task: {task}, Condition: {speed}")
                     speed_path = os.path.join(task_path, speed)
                     for trial in os.listdir(speed_path):
@@ -288,16 +280,51 @@ class LoadData(torch.utils.data.Dataset):
         if label_std is not None:
             self.label_std = label_std
 
-    def gait_cycle_generator(self, peak_indices):
+    def load_vGRF_data(self, label_file_name, record_time_sec):
+        output_df = pd.read_csv(label_file_name,
+                                delimiter=',',
+                                skiprows=4, # skip 4 rows of header
+                                nrows=record_time_sec*1000, # read only the specified number of rows
+                                encoding_errors='ignore') # Add this line to ignore encoding errors
+        output_df = output_df.fillna(0) # fill NaN with 0
+        output_buffer = output_df.values
+        output_buffer = output_buffer[::10, :] # downsample from 1000Hz to 100Hz
+
+        # 2: R_Fx, 3: R_Fy, 4: R_Fz, 5: R_Mx, 6: R_My, 7: R_Mz, 8: R_CoPx, 9: R_CoPy, 10: R_CoPz,
+        # 11: L_Fx, 12: L_Fy, 13: L_Fz, 14: L_Mx, 15: L_My, 16: L_Mz, 17: L_CoPx, 18: L_CoPy, 19: L_CoPz,
+        # 20: GPIO
+        vGRF_R = - output_buffer[:, 4]  # Right vertical GRF
+        vGRF_L = - output_buffer[:, 13] # Left vertical GRF
+        return vGRF_R, vGRF_L
+
+    def extract_gc(self, vGRFdata, threshold):
         """
-        Generate gait cycles based on detected peaks.
+        Extract heel strike indices and form gait cycle segments from GRF data.
+        """
+        vgrf = vGRFdata.copy()
+        # Create binary GRF signal based on threshold
+        bi_vgrf = np.where(vgrf < threshold, 0, 1)
+        diff_vgrf = np.diff(bi_vgrf)
+        # Find indices where the signal goes from 0 to 1
+        heelstrike_index = np.where(diff_vgrf == 1)[0] + 1
+        if len(heelstrike_index) >= 2:
+            # Each gait cycle: start at one heel strike and end just before the next
+            gait_cycles = np.column_stack((heelstrike_index[:-1], heelstrike_index[1:] - 1))
+        else:
+            gait_cycles = np.empty((0, 2))
+            print("Warning: Not enough gait cycles detected.")
+        return heelstrike_index, gait_cycles
+
+    def gait_cycle_generator(self, heelstrike_indices):
+        """
+        Generate gait cycles based on detected heel strikes.
         """
         gc_polar_x_list = []
         gc_polar_y_list = []
 
-        for i in range(len(peak_indices) - 1):
-            start = peak_indices[i]
-            end = peak_indices[i + 1]
+        for i in range(len(heelstrike_indices) - 1):
+            start = heelstrike_indices[i]
+            end = heelstrike_indices[i + 1]
 
             for j in range(start, end):
                 gc_polar_angle = (j - start) / (end - start) * 2 * np.pi

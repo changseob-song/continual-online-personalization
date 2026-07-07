@@ -1,6 +1,6 @@
-# biotorque_controller
+# Gait phase estimator
 
 Unilateral version
 - Reference: right side
-- Input: 14 channels (12 from thigh_R and pelvis IMUs, 2 from right-side motor encoder position and velocity)
-- Output: 1 (Rgith hip moment)
+- Input: 6 channels (3-axis linear accleration, 3-axis angular velocity from thigh IMU)
+- Output: 2 (Gait phase in polar coordinate)
