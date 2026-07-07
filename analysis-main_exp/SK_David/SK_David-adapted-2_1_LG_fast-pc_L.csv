@@ -1,0 +1,11 @@
+update_start_idx_L,update_latency_L,update_dur_L,input_reduced_L,grid_key_L,replayed_bins_L,replayed_bins_task_label_L
+987,0.53,0.37422728538513184,None,"('N', 'o', 'n', 'e')",None,None
+1323,0.23,0.21415925025939941,None,"('N', 'o', 'n', 'e')",None,None
+1660,0.23,0.21523451805114746,None,"('N', 'o', 'n', 'e')",None,None
+1994,0.29,0.27367591857910156,None,"('N', 'o', 'n', 'e')",None,None
+2320,0.26,0.24579930305480957,None,"('N', 'o', 'n', 'e')",None,None
+2638,0.24,0.22886943817138672,None,"('N', 'o', 'n', 'e')",None,None
+2977,0.26,0.24513030052185059,None,"('N', 'o', 'n', 'e')",None,None
+3310,0.41,0.3935706615447998,None,"('N', 'o', 'n', 'e')",None,None
+3640,0.25,0.23589849472045898,None,"('N', 'o', 'n', 'e')",None,None
+3977,0.26,0.2472827434539795,None,"('N', 'o', 'n', 'e')",None,None
