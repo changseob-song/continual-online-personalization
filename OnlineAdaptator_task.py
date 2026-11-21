@@ -258,7 +258,7 @@ class OnlineAdaptator_task():
         min_adaptation_before_replay = 4 # Minimum number of adaptation steps before starting replay
         min_adaptation_count = 0
         max_replay_num = 5 # Maximum number of bins to consider for replay
-        loss_threshold = 1.0 # Loss threshold to accept a training step
+        loss_threshold = 10 # Loss threshold to accept a training step
         replay_threshold_lower = 2.5 # RMSE threshold (%) to include a bin in the replay buffer
         replay_threshold_upper = 20
 
@@ -364,7 +364,7 @@ class OnlineAdaptator_task():
                 # Select top-k highest RMSE bins
                 k = min(max_replay_num, len(positive_bins))  # Choose up to 4
                 top_bins = sorted(positive_bins, key=lambda x: rmse_bins[x[0]][x[1]][x[2]], reverse=True)
-                print(f"Adaptation Worker: Top {k} bins: {top_bins} / {len(positive_bins)}")
+                # print(f"Adaptation Worker: Top {k} bins: {top_bins} / {len(positive_bins)}")
                 
                 # Add bins to replay buffer only if their RMSE is above a threshold
                 bins_for_replay = []
@@ -403,7 +403,8 @@ class OnlineAdaptator_task():
                             tloss += loss.item()
                             num_batches += 1
 
-                    print(f"Avg loss: {tloss / num_batches if num_batches > 0 else 'N/A'}")
+                    avg_loss = (tloss / num_batches) if num_batches > 0 else 'N/A'
+                    print(f"Avg loss: {avg_loss:.2f}")
                     min_adaptation_count += 1
                                     
                 # After training, get the updated weights and send them back
@@ -412,7 +413,7 @@ class OnlineAdaptator_task():
 
                 update_latency = time.time() - start_time
 
-                output_q.put((side, start_idx, update_latency, 'None', 'None', 'None', updated_weights, updated_biases))
+                output_q.put((side, start_idx, update_latency, 'None', 'None', 'None', 'None', avg_loss, updated_weights, updated_biases))
 
             except Exception as e:
                 print(f"Adaptation worker error: {e}")

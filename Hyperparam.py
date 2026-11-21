@@ -42,6 +42,12 @@ hyperparam_config = {
     'batch_size': 16,
 
     'number_of_workers': 10,
+
+    # Reservoir replay (OnlineAdaptator_reservoir)
+    # Use a different seed per subject (space them >= 4 apart, e.g. subject no. x 100).
+    # Only course 1 uses it; later courses restore the RNG state from the checkpoint.
+    'reservoir_seed': 42,
+    'reservoir_buffer_capacity': 50,  # segments stored PER LIMB; keep fixed within a subject
 }
 
 def train():

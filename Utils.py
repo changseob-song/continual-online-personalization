@@ -171,7 +171,7 @@ def trt_inference(input_data, output_shape, context):
 
 # Inference worker function for multiprocessing
 def gait_phase_inference_worker(input_q, output_q, trt_engine_path,
-                                num_input_features, frame_length):
+                                num_input_features, frame_length, ready_event=None):
     if torch.cuda.is_available():
         device = torch.device("cuda")
 
@@ -192,6 +192,9 @@ def gait_phase_inference_worker(input_q, output_q, trt_engine_path,
     for _ in range(10):
         _ = trt_inference(dummy_input_data, dummy_output_shape, context)
     print("Gait Phase TensorRT engine warmed up.")
+    # Lets the controller start the adaptation worker only after this CUDA/TRT init peak.
+    if ready_event is not None:
+        ready_event.set()
 
     while True:
         try:
@@ -280,9 +283,15 @@ def save_data(data_to_save_controller, data_to_save_adaptator, trial_name, pulse
     input_reduced_L_fixed = list(sliced_data_adaptator['input_reduced_L'])
     input_reduced_R_fixed = list(sliced_data_adaptator['input_reduced_R'])
     
-    # Also fix replayed_bins
-    replayed_bins_L_fixed = list(sliced_data_adaptator['replayed_bins_L'])
-    replayed_bins_R_fixed = list(sliced_data_adaptator['replayed_bins_R'])
+    # Also fix replayed_bins: take the raw Python lists, NOT the np.array version.
+    # If every update replays the same number of bins, np.array turns these into
+    # 2D/3D float arrays and each CSV cell becomes a multi-line numpy printout
+    # (incline 0 -> "0."). Raw lists always give "[3, 17]" / "[(0, 1.2), (10, 0.8)]",
+    # and index i of replayed_bins matches index i of replayed_bins_task_label.
+    replayed_bins_L_fixed = list(data_to_save_adaptator['replayed_bins_L'])
+    replayed_bins_R_fixed = list(data_to_save_adaptator['replayed_bins_R'])
+    replayed_bins_task_label_L_fixed = list(data_to_save_adaptator['replayed_bins_task_label_L'])
+    replayed_bins_task_label_R_fixed = list(data_to_save_adaptator['replayed_bins_task_label_R'])
     
     # Grid keys are safer as tuples
     grid_key_L_fixed = [tuple(x) for x in sliced_data_adaptator['grid_key_L']]
@@ -295,7 +304,8 @@ def save_data(data_to_save_controller, data_to_save_adaptator, trial_name, pulse
         'update_dur_R': sliced_data_adaptator['update_dur_R'],
         'input_reduced_R': input_reduced_R_fixed,
         'grid_key_R': grid_key_R_fixed,
-        'replayed_bins_R': replayed_bins_R_fixed   # Use the fixed version
+        'replayed_bins_R': replayed_bins_R_fixed,
+        'replayed_bins_task_label_R': replayed_bins_task_label_R_fixed
     }
 
     pc_data_L = {
@@ -304,7 +314,8 @@ def save_data(data_to_save_controller, data_to_save_adaptator, trial_name, pulse
         'update_dur_L': sliced_data_adaptator['update_dur_L'],
         'input_reduced_L': input_reduced_L_fixed,
         'grid_key_L': grid_key_L_fixed,
-        'replayed_bins_L': replayed_bins_L_fixed   # Use the fixed version
+        'replayed_bins_L': replayed_bins_L_fixed,   # Use the fixed version
+        'replayed_bins_task_label_L': replayed_bins_task_label_L_fixed
     }
 
     # Verify shapes before creation (Optional debugging)

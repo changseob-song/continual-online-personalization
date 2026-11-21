@@ -5,6 +5,7 @@ import pandas as pd
 
 from OnlineAdaptator_PC import OnlineAdaptator_PC
 from OnlineAdaptator_task import OnlineAdaptator_task
+from OnlineAdaptator_reservoir import OnlineAdaptator_reservoir
 from Utils_Mocap_Datastream import Mocap_trigger
 from Utils_GPIO import GPIO_control
 from Utils_Teleplot import Teleplot
@@ -16,7 +17,7 @@ class Controller:
     def __init__(self, Exo, pt_model_path, trt_engine_path, torque_profile_path, pca_model_path, encoder_model_path,
                  linear_layer_path, buffer_file_path,
                  trigger_type, trial_name, course_num, incline, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
-                 adaptation_ON=False, replay_buffer_ON=False, PC_USE=False):
+                 adaptation_ON=False, replay_buffer_ON=False, PC_USE=False, RESERVOIR_USE=False):
         self.Exo = Exo
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
@@ -36,6 +37,7 @@ class Controller:
         self.adaptation_ON = adaptation_ON
         self.replay_buffer_ON = replay_buffer_ON
         self.PC_USE = PC_USE
+        self.RESERVOIR_USE = RESERVOIR_USE
         self.last_used_peak_idx_L = 0
         self.last_used_peak_idx_R = 0
 
@@ -67,9 +69,10 @@ class Controller:
         self.gait_phase_output_q = mp.Queue()
 
         # Start gait_phase_inference_worker process
+        self.gait_phase_ready = mp.Event()
         self.gait_phase_inference_process = mp.Process(target=gait_phase_inference_worker,
                                             args=(self.gait_phase_input_q, self.gait_phase_output_q, self.trt_engine_path,
-                                                  self.num_input_features, self.Exo.frame_length))
+                                                  self.num_input_features, self.Exo.frame_length, self.gait_phase_ready))
         self.gait_phase_inference_process.start()
 
         # For the first course, load the pre-trained one
@@ -91,7 +94,15 @@ class Controller:
 
 
         # Initialize OnlineAdaptator
-        if PC_USE:
+        if PC_USE and RESERVOIR_USE:
+            raise ValueError("Set only one of PC_USE / RESERVOIR_USE to True")
+        # Jetson shares RAM between CPU and GPU: starting the adaptation worker while
+        # the TRT worker is still initializing CUDA can OOM, so wait for its warm-up.
+        self._wait_for_gait_phase_worker()
+        if RESERVOIR_USE:
+            self.online_adaptator = OnlineAdaptator_reservoir(self.pt_model_path, self.pca_model_path, self.encoder_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path,
+                                                self.adaptation_ON, self.replay_buffer_ON)
+        elif PC_USE:
             self.online_adaptator = OnlineAdaptator_PC(self.pt_model_path, self.pca_model_path, self.encoder_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path,
                                                 self.adaptation_ON, self.replay_buffer_ON)
         else:
@@ -99,6 +110,17 @@ class Controller:
                                                 self.adaptation_ON, self.replay_buffer_ON)
 
         self.incline_keys = {'RD': -10, 'RD_slow': -10, 'RD_fast': -10, 'LG': 0, 'LG_slow': 0, 'LG_fast': 0, 'RA': 10, 'RA_slow': 10, 'RA_fast': 10}
+
+    def _wait_for_gait_phase_worker(self, timeout_s=120):
+        deadline = time.monotonic() + timeout_s
+        while not self.gait_phase_ready.wait(timeout=0.1):
+            if not self.gait_phase_inference_process.is_alive():
+                raise RuntimeError('Gait phase TRT worker exited before warm-up (exit code {})'.format(
+                    self.gait_phase_inference_process.exitcode))
+            if time.monotonic() > deadline:
+                self.gait_phase_inference_process.terminate()
+                self.gait_phase_inference_process.join()
+                raise RuntimeError('Gait phase TRT worker did not warm up within {} s'.format(timeout_s))
 
     def detect_heel_strike(self, GRF_data, threshold, min_interval):
         # Create binary GRF signal based on threshold
@@ -137,6 +159,7 @@ class Controller:
         update_latency_R, update_latency_L = 0.0, 0.0
         update_dur_R, update_dur_L = 0.0, 0.0
         gp_loop_index = 0
+        avg_loss = 0
         start_idx_L, start_idx_R = -1, -1
 
         current_incline = self.incline_keys[self.incline];  # Default task settings
@@ -162,6 +185,7 @@ class Controller:
             'update_dur_L': [], 'update_dur_R': [],
             'input_reduced_R': [], 'input_reduced_L': [],
             'grid_key_R': [], 'grid_key_L': [], 'replayed_bins_R': [], 'replayed_bins_L': [],
+            'replayed_bins_task_label_R': [], 'replayed_bins_task_label_L': []
         }
 
         # Create local references to data arrays for faster access
@@ -182,7 +206,7 @@ class Controller:
         log_input_reduced_L = self.data_to_save_adaptator['input_reduced_L']; log_input_reduced_R = self.data_to_save_adaptator['input_reduced_R']
         log_grid_key_L = self.data_to_save_adaptator['grid_key_L']; log_grid_key_R = self.data_to_save_adaptator['grid_key_R']
         log_replayed_bins_L = self.data_to_save_adaptator['replayed_bins_L']; log_replayed_bins_R = self.data_to_save_adaptator['replayed_bins_R']
-
+        log_replayed_bins_task_label_L = self.data_to_save_adaptator['replayed_bins_task_label_L']; log_replayed_bins_task_label_R = self.data_to_save_adaptator['replayed_bins_task_label_R']
         # Start recording time
         first_pulse_sent = False
         first_pulse_end_time = None
@@ -271,7 +295,6 @@ class Controller:
                     if (self.last_used_peak_idx_L not in heelstrike_indices_L[-3:]): # Only trigger if the last used peak is not in the recent heel strikes
                         # Get the absolute start and end indices for the data slice
                         start_idx_abs = heelstrike_indices_L[-3]; end_idx_abs = heelstrike_indices_L[-1]
-                        print('\nL', start_idx_abs, heelstrike_indices_L[-2:-1], end_idx_abs)
                         mid_peak_idx_rel = heelstrike_indices_L[-2:-1] - start_idx_abs # This is relative about start_idx_abs
 
                         # Slice the data from the input stream buffer
@@ -288,7 +311,6 @@ class Controller:
                     if (self.last_used_peak_idx_R not in heelstrike_indices_R[-3:]):
                         # Get the absolute start and end indices for the data slice
                         start_idx_abs = heelstrike_indices_R[-3]; end_idx_abs = heelstrike_indices_R[-1]
-                        print('\nR', start_idx_abs, heelstrike_indices_R[-2:-1], end_idx_abs)
                         mid_peak_idx_rel = heelstrike_indices_R[-2:-1] - start_idx_abs # This is relative about start_idx_abs
 
                         # Slice the data from the input stream buffer
@@ -303,18 +325,20 @@ class Controller:
             # Check for new weights from the adaptation worker
             updated_params = self.online_adaptator.get_updated_weights()
             if updated_params:
-                side, start_index, update_dur, input_reduced, grid_key, replayed_bins, weights, biases = updated_params
+                side, start_index, update_dur, input_reduced, grid_key, replayed_bins, replayed_bins_task_label, avg_loss, weights, biases = updated_params
                 if side == 'R':
                     self.linear_weights_R = weights;    self.linear_biases_R = biases
                     start_idx_R = start_index;  log_start_idx_R.append(start_index)
                     update_dur_R = update_dur; log_update_dur_R.append(update_dur)
-                    log_input_reduced_R.append(input_reduced); log_grid_key_R.append(grid_key); log_replayed_bins_R.append(replayed_bins)
+                    log_input_reduced_R.append(input_reduced); log_grid_key_R.append(grid_key)
+                    log_replayed_bins_R.append(replayed_bins); log_replayed_bins_task_label_R.append(replayed_bins_task_label)
                     update_latency_R = (loop_index - start_index) / self.Exo.control_freq_Hz; log_update_latency_R.append(update_latency_R)
                 elif side == 'L':
                     self.linear_weights_L = weights;    self.linear_biases_L = biases
                     start_idx_L = start_index;   log_start_idx_L.append(start_index)
                     update_dur_L = update_dur; log_update_dur_L.append(update_dur)
-                    log_input_reduced_L.append(input_reduced); log_grid_key_L.append(grid_key); log_replayed_bins_L.append(replayed_bins)
+                    log_input_reduced_L.append(input_reduced); log_grid_key_L.append(grid_key)
+                    log_replayed_bins_L.append(replayed_bins); log_replayed_bins_task_label_L.append(replayed_bins_task_label)
                     update_latency_L = (loop_index - start_index) / self.Exo.control_freq_Hz; log_update_latency_L.append(update_latency_L)
 
             # 5. TensorRT inference & Apply linear layer weights and biases
@@ -445,6 +469,7 @@ class Controller:
                 "start_idx_R": start_idx_R,
                 "loop_index": loop_index,
                 "loop_time_exceeded": loop_time_exceeded,
+                "avg_loss": avg_loss,
                 "gp_inference": (gp_loop_index-loop_index),
             }
             self.teleplot.sendBatchTelemetry(telemetry_data)

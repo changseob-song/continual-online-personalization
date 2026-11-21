@@ -12,8 +12,8 @@ if __name__ == '__main__':
     os.system("sudo sync; sudo sysctl -w vm.drop_caches=3")
     time.sleep(1)
 
-# Trial setting
-    subject = 'test_CS'
+    # Trial setting
+    subject = 'SK_anon'
     condition = 'pc_buffer'
 
     # Condition
@@ -21,6 +21,7 @@ if __name__ == '__main__':
     adaptation_ON = True
     replay_buffer_ON = True
     PC_USE = True
+    RESERVOIR_USE = False  # True -> OnlineAdaptator_reservoir (overrides PC/task; don't set with PC_USE)
 
     courses = {
         # '1_1': 'LG_slow', 
@@ -29,11 +30,11 @@ if __name__ == '__main__':
         # '4_1': 'RA_fast',
         # '5_1': 'RD_slow',
         # '6_1': 'RD_fast',
-        '7_1': 'LG_slow',
-        '8_1': 'LG_fast',
-        '8_2': 'RA_slow',
-        '8_3': 'RA_fast',
-        '8_4': 'RD_slow',
+        # '7_1': 'LG_slow',
+        # '8_1': 'LG_fast',
+        # '8_2': 'RA_slow',
+        # '8_3': 'RA_fast',
+        # '8_4': 'RD_slow',
         '8_5': 'RD_fast',
         '7_2': 'LG_fast',
         '8_6': 'LG_slow',
@@ -44,7 +45,7 @@ if __name__ == '__main__':
     }
 
     # Body mass setting
-    body_mass_kg = 50  # kg
+    body_mass_kg = 70  # kg
     # Trigger setting
     trigger_type = "mocap"  # "mocap" or "typing"
     # Exo setting
@@ -90,7 +91,7 @@ if __name__ == '__main__':
                                 trigger_type, trial_name, course_num_, incline,
                                 pulse_after_start, trial_dur_sec, adjustment_duration,
                                 body_mass_kg,
-                                adaptation_ON, replay_buffer_ON, PC_USE
+                                adaptation_ON, replay_buffer_ON, PC_USE, RESERVOIR_USE
                                 )
 
         controller.run_loop(exo_ON)

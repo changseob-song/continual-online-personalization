@@ -8,16 +8,24 @@ class Teleplot:
         self.teleplotAddr = (host, port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
+    @staticmethod
+    def _key(name):
+        # "pos_L" -> "pos_L,pos": Teleplot puts series with the same label after the
+        # comma into one chart, so each _L/_R pair shares a plot (legend keeps _L/_R).
+        if name.endswith(('_L', '_R')):
+            return f"{name},{name[:-2]}"
+        return name
+
     def sendTelemetry(self, name, value):
         now = time.time() * 1000
-        msg = f"{name}:{now}:{value}|g"
+        msg = f"{self._key(name)}:{now}:{value}|g"
         self.sock.sendto(msg.encode(), self.teleplotAddr)
 
     def sendBatchTelemetry(self, data_dict):
         now = time.time() * 1000
         try:
             for name, value in data_dict.items():
-                msg = f"{name}:{now}:{value}|g"
+                msg = f"{self._key(name)}:{now}:{value}|g"
                 self.sock.sendto(msg.encode(), self.teleplotAddr)
             return True  # Successfully sent
         except Exception as e:

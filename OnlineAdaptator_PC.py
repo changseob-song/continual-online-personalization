@@ -143,6 +143,7 @@ class OnlineAdaptator_PC():
         self.adaptation_ON = adaptation_ON
         self.replay_buffer_ON = replay_buffer_ON
 
+        self.bin_task_label = {side: [] for side in ['L', 'R']} # To keep track of incline and speed for each bin
         self.bin_grid = {side: [] for side in ['L', 'R']} 
         self.bin_data = {side: [] for side in ['L', 'R']}
         self.bin_mid_idx = {side: [] for side in ['L', 'R']}
@@ -184,6 +185,7 @@ class OnlineAdaptator_PC():
                 'bin_grid': self.bin_grid,
                 'bin_data': self.bin_data,
                 'bin_mid_idx': self.bin_mid_idx,
+                'bin_task_label': self.bin_task_label
                 }, f)
             print(f"Buffer saved to {buffer_file_name}... Bin_size: L {len(self.bin_grid['L'])}, R {len(self.bin_grid['R'])}, ", flush=True)
         except Exception as e:
@@ -267,6 +269,7 @@ class OnlineAdaptator_PC():
             self.bin_grid = buffer_data['bin_grid']
             self.bin_data = buffer_data['bin_data']
             self.bin_mid_idx = buffer_data['bin_mid_idx']
+            self.bin_task_label = buffer_data['bin_task_label']
             print("Adaptation Worker: Loaded replay buffer with size - L: {}, R: {}".format(len(self.bin_grid['L']), len(self.bin_grid['R'])))
             
             print("Adaptation Worker: Reconstructing DataLoaders from saved buffer...")
@@ -290,7 +293,7 @@ class OnlineAdaptator_PC():
                         subset = Subset(dataset, train_indices)
                         loader = DataLoader(subset, batch_size=16, shuffle=True, num_workers=0, pin_memory=True)
                         self.bin_loader[side_loop].append(loader)
-                    print(f"Adaptation Worker: Reconstructed DataLoader for {side_loop} bin {i}, Dataset size: {len(dataset)}")
+                    # print(f"Adaptation Worker: Reconstructed DataLoader for {side_loop} bin {i}, Dataset size: {len(dataset)}")
 
             print("Adaptation Worker: Loader reconstruction complete. Sizes - L: {}, R: {}".format(len(self.bin_loader['L']), len(self.bin_loader['R'])))
 
@@ -311,7 +314,7 @@ class OnlineAdaptator_PC():
         min_adaptation_before_replay = 4 # Minimum number of adaptation steps before starting replay
         min_adaptation_count = 0
         max_replay_num = 4 # Maximum number of bins to consider for replay
-        loss_threshold = 1.0 # Loss threshold to accept a training step
+        loss_threshold = 10 # Loss threshold to accept a training step
         replay_threshold_lower = 2.5 # RMSE threshold (%) to include a bin in the replay buffer
         replay_threshold_upper = 20
 
@@ -387,12 +390,14 @@ class OnlineAdaptator_PC():
                     if course_num > 1: min_adaptation_passed = True
                     if min_adaptation_passed:                        
                         if grid_key not in self.bin_grid[side]: # New grid point
+                            self.bin_task_label[side].append((incline, speed))
                             self.bin_grid[side].append(grid_key)
                             self.bin_data[side].append(input_data)
                             self.bin_mid_idx[side].append(mid_peak_idx)
                             self.bin_loader[side].append(train_loader_current_task)
                         else: # Existing grid point, update data
                             existing_idx = self.bin_grid[side].index(grid_key)
+                            self.bin_task_label[side][existing_idx] = (incline, speed)
                             self.bin_data[side][existing_idx] = input_data
                             self.bin_mid_idx[side][existing_idx] = mid_peak_idx
                             self.bin_loader[side][existing_idx] = train_loader_current_task
@@ -417,18 +422,15 @@ class OnlineAdaptator_PC():
                         # Calculate RMSE
                         bin_rmse.append(rmse_monitoring(model, full_loader, device))
                         # print(f"Adaptation Worker monitoring: {side} - {bin_idx}: {bin_rmse[bin_idx]:.2f} (RMSE)")
-                
-                print(f"Time (rmse calc): {time.time() - start_time:.2f} seconds")
-
 
                 # 7. Select top-k highest RMSE bins
                 bin_size = len(self.bin_grid[side])
                 k = min(max_replay_num, bin_size)  # Choose up to 4
                 top_bins = sorted(range(bin_size), key=lambda x: bin_rmse[x], reverse=True)
-                print(bin_size, max_replay_num, k, len(top_bins))
                 
                 # 8. Add bins to replay buffer only if their RMSE is above a threshold
                 bins_for_replay = []
+                bins_for_replay_task_label = []
                 train_loader_combined_list = []
                 replay_count = 0
 
@@ -437,10 +439,11 @@ class OnlineAdaptator_PC():
                         if (replay_threshold_lower < bin_rmse[bin_idx] < replay_threshold_upper) and (replay_count < k):
                             train_loader_combined_list.append(self.bin_loader[side][bin_idx])
                             bins_for_replay.append(bin_idx)
+                            bins_for_replay_task_label.append(self.bin_task_label[side][bin_idx])
                             replay_count += 1
                         # else:
                         #     print(f"Adaptation Worker: Skipping bin {bin_idx} with RMSE {bin_rmse[bin_idx]:.2f} (threshold: {replay_threshold_lower}% - {replay_threshold_upper}%)")
-                    print(f"Adaptation Worker: Replaying bins with RMSE > {replay_threshold_lower}%: {bins_for_replay}")
+                    print(f"Adaptation Worker: Replaying bins with RMSE > {replay_threshold_lower}%: {bins_for_replay}, Task labels: {bins_for_replay_task_label}")
 
                 # Add the current task data to the replay if no misdetection
                 if not misdetection_flag :
@@ -467,11 +470,11 @@ class OnlineAdaptator_PC():
                             optimizer.step()
                             tloss += loss.item()
                             num_batches += 1
+                    
+                    avg_loss = (tloss / num_batches) if num_batches > 0 else 'N/A'
+                    print(f"avg loss: {avg_loss:.2f}")
 
                     min_adaptation_count += 1
-                        
-                print(f"Time (adaptation): {time.time() - start_time:.2f} seconds")
-
 
                 # After training, get the updated weights and send them back
                 updated_weights = model.linear.weight.data.clone().cpu().numpy()
@@ -480,7 +483,7 @@ class OnlineAdaptator_PC():
                 update_latency = time.time() - start_time
                 # print(f"time taken for adaptation: {time.time() - start_time:.2f} seconds")
 
-                output_q.put((side, end_idx, update_latency, input_data_reduced, grid_key, bins_for_replay, updated_weights, updated_biases))
+                output_q.put((side, end_idx, update_latency, input_data_reduced, grid_key, bins_for_replay, bins_for_replay_task_label, avg_loss, updated_weights, updated_biases))
 
             except Exception as e:
                 print(f"Adaptation worker error: {e}")
