@@ -17,7 +17,8 @@ class Controller:
     def __init__(self, Exo, pt_model_path, trt_engine_path, torque_profile_path, pca_model_path, encoder_model_path,
                  linear_layer_path, buffer_file_path,
                  trigger_type, trial_name, course_num, incline, pulse_after_start, trial_dur_sec, adjustment_duration, body_mass_kg,
-                 adaptation_ON=False, replay_buffer_ON=False, PC_USE=False, RESERVOIR_USE=False):
+                 adaptation_ON=False, replay_buffer_ON=False, PC_USE=False, RESERVOIR_USE=False,
+                 RESERVOIR_ERROR_SORTING=False):
         self.Exo = Exo
         self.pt_model_path = pt_model_path
         self.pt_model_linear_path = pt_model_path.replace('.pt', '_linear.pt')
@@ -38,6 +39,7 @@ class Controller:
         self.replay_buffer_ON = replay_buffer_ON
         self.PC_USE = PC_USE
         self.RESERVOIR_USE = RESERVOIR_USE
+        self.RESERVOIR_ERROR_SORTING = RESERVOIR_ERROR_SORTING
         self.last_used_peak_idx_L = 0
         self.last_used_peak_idx_R = 0
 
@@ -101,7 +103,8 @@ class Controller:
         self._wait_for_gait_phase_worker()
         if RESERVOIR_USE:
             self.online_adaptator = OnlineAdaptator_reservoir(self.pt_model_path, self.pca_model_path, self.encoder_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path,
-                                                self.adaptation_ON, self.replay_buffer_ON)
+                                                self.adaptation_ON, self.replay_buffer_ON,
+                                                error_sorting=self.RESERVOIR_ERROR_SORTING)
         elif PC_USE:
             self.online_adaptator = OnlineAdaptator_PC(self.pt_model_path, self.pca_model_path, self.encoder_model_path, self.course_num, self.linear_layer_path, self.buffer_file_path,
                                                 self.adaptation_ON, self.replay_buffer_ON)

@@ -22,6 +22,7 @@ if __name__ == '__main__':
     replay_buffer_ON = True
     PC_USE = True
     RESERVOIR_USE = False  # True -> OnlineAdaptator_reservoir (overrides PC/task; don't set with PC_USE)
+    RESERVOIR_ERROR_SORTING = False  # reservoir only: True -> top-k highest RMSE (like PC), False -> random; keep fixed within a subject
 
     courses = {
         # '1_1': 'LG_slow', 
@@ -91,7 +92,8 @@ if __name__ == '__main__':
                                 trigger_type, trial_name, course_num_, incline,
                                 pulse_after_start, trial_dur_sec, adjustment_duration,
                                 body_mass_kg,
-                                adaptation_ON, replay_buffer_ON, PC_USE, RESERVOIR_USE
+                                adaptation_ON, replay_buffer_ON, PC_USE, RESERVOIR_USE,
+                                RESERVOIR_ERROR_SORTING
                                 )
 
         controller.run_loop(exo_ON)

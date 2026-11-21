@@ -10,7 +10,8 @@ over the subsequent valid segments, separately for each limb.
 Retrieval (ER-reservoir): every stored segment is scored with the current
 model exactly as OnlineAdaptator_PC scores its bins (gait-phase RMSE %, every
 10th window, no gradient). Only segments with 2.5 < RMSE < 20 are eligible,
-and up to max_replay_count of them are drawn uniformly at random. Training
+and up to max_replay_count of them are chosen: uniformly at random by default,
+or, with error_sorting=True, highest RMSE first (PC's top-k rule). Training
 steps use PC's loss gate (MSE < 10). Algorithm R itself only maintains the
 buffer and plays no role in retrieval.
 """
@@ -225,6 +226,8 @@ class OnlineAdaptator_reservoir:
     Set random_seed to an integer for repeatability, or None for a fresh run.
     replay_sample_budget optionally caps the number of replay TCN windows.
     It never pads a shortage with duplicated samples.
+    error_sorting picks replay segments among the eligible ones: False = random,
+    True = top-k highest RMSE (same rule as PC).
     """
 
     def __init__(self, model_path, pca_model_path, encoder_model_path, course_num,
@@ -232,9 +235,12 @@ class OnlineAdaptator_reservoir:
                  replay_buffer_ON=False, *,
                  buffer_capacity=hyperparam_config['reservoir_buffer_capacity'],
                  max_replay_count=4, random_seed=hyperparam_config['reservoir_seed'],
-                 min_adaptation_before_replay=4, replay_sample_budget=None):
+                 min_adaptation_before_replay=4, replay_sample_budget=None,
+                 error_sorting=False):
         # Validate configuration in the parent, before starting the worker.
         ReservoirBuffer(buffer_capacity)
+        if not isinstance(error_sorting, bool):
+            raise ValueError('error_sorting must be True or False')
         for name, value in [('max_replay_count', max_replay_count),
                             ('min_adaptation_before_replay', min_adaptation_before_replay)]:
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -253,7 +259,8 @@ class OnlineAdaptator_reservoir:
             args=(self.input_q, self.output_q, model_path, course_num,
                   linear_layer_path, buffer_file_path, dict(hyperparam_config),
                   adaptation_ON, replay_buffer_ON, buffer_capacity, max_replay_count,
-                  random_seed, min_adaptation_before_replay, replay_sample_budget),
+                  random_seed, min_adaptation_before_replay, replay_sample_budget,
+                  error_sorting),
         )
         self.adaptation_process.start()
 
@@ -305,12 +312,13 @@ class OnlineAdaptator_reservoir:
 def _adaptation_worker_process(input_q, output_q, model_path, course_num,
                                linear_layer_path, buffer_file_path, config,
                                adaptation_on, replay_on, capacity, replay_count,
-                               random_seed, min_before_replay, sample_budget):
+                               random_seed, min_before_replay, sample_budget, error_sorting):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
         _run_worker(input_q, output_q, model_path, course_num, linear_layer_path,
                     buffer_file_path, config, adaptation_on, replay_on, capacity,
-                    replay_count, random_seed, min_before_replay, sample_budget)
+                    replay_count, random_seed, min_before_replay, sample_budget,
+                    error_sorting)
     except Exception:
         traceback.print_exc()
         raise
@@ -318,7 +326,9 @@ def _adaptation_worker_process(input_q, output_q, model_path, course_num,
 
 def _run_worker(input_q, output_q, model_path, course_num, linear_layer_path,
                 buffer_file_path, config, adaptation_on, replay_on, capacity,
-                replay_count, random_seed, min_before_replay, sample_budget):
+                replay_count, random_seed, min_before_replay, sample_budget,
+                error_sorting=False):
+    selection = 'top-k' if error_sorting else 'random'
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     base_path = os.path.dirname(model_path)
     normalization = tuple(np.load(os.path.join(base_path, name + '.npy'))
@@ -357,6 +367,11 @@ def _run_worker(input_q, output_q, model_path, course_num, linear_layer_path,
             memories[side].load_state_dict(checkpoint['memories'][side])
         adaptation_count = checkpoint['adaptation_count']
         loader_generator.set_state(checkpoint['loader_rng_state'])
+        # Checkpoints saved before this option existed always used random selection.
+        saved_selection = 'top-k' if checkpoint.get('error_sorting', False) else 'random'
+        if saved_selection != selection:
+            print('WARNING: reservoir replay selection changed within a subject: {} was saved with {}, '
+                  'this course uses {}'.format(buffer_file_path, saved_selection, selection), flush=True)
         with open(linear_layer_path, 'rb') as stream:
             parameters = _NumpyCompatUnpickler(stream).load()
         for side in ['L', 'R']:
@@ -383,6 +398,7 @@ def _run_worker(input_q, output_q, model_path, course_num, linear_layer_path,
             'loader_rng_state': loader_generator.get_state(),
             'max_replay_count': replay_count,
             'replay_sample_budget': sample_budget,
+            'error_sorting': error_sorting,
             'random_seed': random_seed,
             'replay_rmse_range': (REPLAY_RMSE_LOWER, REPLAY_RMSE_UPPER),
             'loss_threshold': LOSS_THRESHOLD,
@@ -413,8 +429,8 @@ def _run_worker(input_q, output_q, model_path, course_num, linear_layer_path,
     torch.nn.functional.mse_loss(dummy(inputs.to(device)), labels.to(device)).backward()
     dummy_optimizer.step()
     del dummy, dummy_optimizer, warmup_loader
-    print('Reservoir worker ready on {}; capacity {} per limb, replay up to {}, seed {}'.format(
-        device, capacity, replay_count, random_seed), flush=True)
+    print('Reservoir worker ready on {}; capacity {} per limb, replay up to {} ({}), seed {}'.format(
+        device, capacity, replay_count, selection, random_seed), flush=True)
 
     os.makedirs(os.path.dirname(os.path.abspath(metrics_path)), exist_ok=True)
     with open(metrics_path, 'a', buffering=1) as metrics_stream:
@@ -442,13 +458,17 @@ def _run_worker(input_q, output_q, model_path, course_num, linear_layer_path,
             selected, stored_datasets, stored_rmse, eligible = [], [], [], []
             if replay_on and replay_ready and memory.entries:
                 # Score every stored segment with the current (pre-update) model,
-                # keep those inside PC's RMSE band, then pick randomly among them.
+                # keep those inside PC's RMSE band, then pick among them.
                 stored_datasets = [make_dataset(entry['input_data'], entry['mid_peak_idx'])
                                    for entry in memory.entries]
                 stored_rmse = [_phase_rmse(models[side], dataset, device) for dataset in stored_datasets]
                 eligible = [i for i, rmse in enumerate(stored_rmse)
                             if REPLAY_RMSE_LOWER < rmse < REPLAY_RMSE_UPPER]
-                selected = memory.sample_indices(replay_count, eligible)
+                if error_sorting:
+                    # PC's rule: highest RMSE first, up to replay_count (stable sort: ties keep slot order).
+                    selected = sorted(eligible, key=lambda i: stored_rmse[i], reverse=True)[:replay_count]
+                else:
+                    selected = memory.sample_indices(replay_count, eligible)
             historical_datasets = [stored_datasets[i] for i in selected]
             replay_ids = [memory.entries[i]['stream_id'] for i in selected]
             # Logging only, same order as replay_ids: (incline, speed) of each replayed segment.
@@ -483,6 +503,7 @@ def _run_worker(input_q, output_q, model_path, course_num, linear_layer_path,
                 'side': side, 'end_idx': int(end_idx), 'update': adaptation_count,
                 'buffer_size': len(memory.entries), 'seen_count': memory.seen_count,
                 'retained_slot': retained_slot, 'replay_ids': replay_ids,
+                'replay_selection': selection,
                 'replay_units': len(selected), 'current_windows': len(current_dataset),
                 'available_replay_windows': available_windows, 'replay_windows': replay_windows,
                 'total_windows': len(combined_dataset), 'optimizer_steps': optimizer_steps,
@@ -516,9 +537,9 @@ def _run_worker(input_q, output_q, model_path, course_num, linear_layer_path,
                     # replay_ids/labels were taken before add(), which may have overwritten a picked slot.
                     picks = ', '.join('#{} {} {:.1f}%'.format(stream_id, _task_str(label), stored_rmse[i])
                                       for stream_id, label, i in zip(replay_ids, replay_task_labels, selected))
-                    replay_line = 'scored {}, eligible {} ({}<RMSE<{}), picked {}{}'.format(
-                        len(stored_rmse), len(eligible),
-                        REPLAY_RMSE_LOWER, REPLAY_RMSE_UPPER, len(selected), ': ' + picks if picks else '')
+                    replay_line = 'scored {}, eligible {} ({}<RMSE<{}), picked {} ({}){}'.format(
+                        len(stored_rmse), len(eligible), REPLAY_RMSE_LOWER, REPLAY_RMSE_UPPER,
+                        len(selected), selection, ': ' + picks if picks else '')
                 if not replay_ready:
                     store_line = 'warm-up update {}/{}, not stored'.format(adaptation_count, min_before_replay)
                 else:

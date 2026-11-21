@@ -7,8 +7,9 @@ difference** is how replay memory is kept and chosen.
 
 > **ER-reservoir**: Algorithm R maintains the buffer (it only decides which
 > incoming segment to keep and which stored one to replace). Replay segments are
-> drawn at random from stored segments that satisfy the same error threshold as
-> the PC framework, and the model is trained on current + replayed data.
+> drawn from stored segments that satisfy the same error threshold as the PC
+> framework (at random by default, or highest error first with
+> `RESERVOIR_ERROR_SORTING = True`), and the model is trained on current + replayed data.
 
 ---
 
@@ -21,10 +22,14 @@ adaptation_ON    = True
 replay_buffer_ON = True    # False = train on current data only (no replay)
 PC_USE           = False
 RESERVOIR_USE    = True    # selects OnlineAdaptator_reservoir; do not set together with PC_USE
+RESERVOIR_ERROR_SORTING = False  # replay choice among eligible segments: False = random, True = top-k RMSE (like PC)
 ```
 
 `Controller` raises an error if both `PC_USE` and `RESERVOIR_USE` are True. If both are False, the task-based
-adaptor (`OnlineAdaptator_task`) is used, as before.
+adaptor (`OnlineAdaptator_task`) is used, as before. `RESERVOIR_ERROR_SORTING` only affects the reservoir
+adaptor; PC always uses top-k. Keep it fixed within a subject: a course that loads a checkpoint saved with the
+other setting prints a `WARNING` line. The `condition` string in `Main.py` is not set automatically, so name the
+condition accordingly (e.g. `reservoir_random` / `reservoir_topk`).
 
 **`Hyperparam.py` → `hyperparam_config`**
 
@@ -58,7 +63,9 @@ segment (side, incline, speed, input_data, mid_peak_idx, end_idx)
   │     score EVERY stored segment with the current (pre-update) model
   │       = gait-phase RMSE %, every 10th window, no_grad      (same as PC)
   │     eligible = { segments with 2.5 < RMSE < 20 }           (same band as PC)
-  │     replay   = random sample of up to 4 from eligible      (PC: top-RMSE first)
+  │     replay   = up to 4 from eligible:
+  │                  RESERVOIR_ERROR_SORTING False → random sample
+  │                  RESERVOIR_ERROR_SORTING True  → highest RMSE first   (same rule as PC)
   │                (fewer than 4 eligible → replay fewer; none → no replay)
   │
   ├─ train linear layer: one shuffled pass over replay + current,
@@ -89,7 +96,7 @@ Notes:
 | Storage unit | One segment per PCA grid cell `(PC1//2, PC2//2, cadence//10)`. A new segment in the same cell overwrites the old one. | One segment per slot, kept by Algorithm R (uniform over all segments seen) |
 | Capacity | Unbounded (one slot per visited cell) | `reservoir_buffer_capacity` per limb (default 50) |
 | Replay candidates | Stored bins with 2.5 < RMSE < 20 | **Same** |
-| Replay choice | Highest-RMSE bins first, up to 4 | **Random** among candidates, up to 4 |
+| Replay choice | Highest-RMSE bins first, up to 4 | **Random** among candidates, up to 4 (default); **same as PC** with `RESERVOIR_ERROR_SORTING = True` |
 | RMSE scoring | Every 10th window, current model, `no_grad` | **Same** (verified identical to 6 decimals) |
 | Training | Linear layer only, Adam, batch 16, one pass, loss gate < 10 | **Same** |
 | Warm-up before storing | 4 messages | **Same** |
@@ -115,6 +122,7 @@ Paths follow `Main.py`: course N loads `*_{N-1}.pkl` and writes `*_{N}.pkl` in t
   'format': 'reservoir_replay_v1',
   'memories': {'L': {...}, 'R': {...}},   # capacity, seen_count, entries, storage/replay RNG states
   'adaptation_count', 'loader_rng_state', 'max_replay_count', 'replay_sample_budget',
+  'error_sorting',                         # missing in older checkpoints = False (random)
   'random_seed', 'replay_rmse_range': (2.5, 20.0), 'loss_threshold': 10.0,
 }
 # each entry: {'input_data', 'mid_peak_idx', 'stream_id', 'task_label': (incline, speed)}
@@ -126,8 +134,11 @@ Final linear weights/biases for L and R. The Controller writes the same file at 
 overwrites it when it stops. The values are the same or slightly newer.
 
 ### `buffer_{N}_metrics.jsonl` (one line per update)
-`side, end_idx, update, buffer_size, seen_count, retained_slot, replay_ids, replay_units, current_windows,
-available_replay_windows, replay_windows, total_windows, optimizer_steps, avg_loss, batch_size, duration_s`
+`side, end_idx, update, buffer_size, seen_count, retained_slot, replay_ids, replay_selection, replay_units,
+current_windows, available_replay_windows, replay_windows, total_windows, optimizer_steps, avg_loss, batch_size,
+duration_s`
+
+- `replay_selection`: `"random"` or `"top-k"` (from `RESERVOIR_ERROR_SORTING`).
 
 - `retained_slot`: the slot the current segment went into. `null` means the segment was discarded, or that
   warm-up was still running.
@@ -157,8 +168,8 @@ How to read these columns:
 
 | File | Change |
 |---|---|
-| `Controller.py` | Imports `OnlineAdaptator_reservoir`; new `RESERVOIR_USE` argument; error if combined with `PC_USE`. |
-| `Main.py` | New `RESERVOIR_USE` flag passed to `Controller`. |
+| `Controller.py` | Imports `OnlineAdaptator_reservoir`; new `RESERVOIR_USE` and `RESERVOIR_ERROR_SORTING` arguments; error if `RESERVOIR_USE` is combined with `PC_USE`. |
+| `Main.py` | New `RESERVOIR_USE` and `RESERVOIR_ERROR_SORTING` flags passed to `Controller`. |
 | `Hyperparam.py` | Added `reservoir_seed`, `reservoir_buffer_capacity`. |
 | `Utils.py` (`save_data`) | `replayed_bins_*` / `replayed_bins_task_label_*` are written from the raw Python lists. Before, a trial in which every update replayed the same number of bins produced multi-line numpy arrays in each cell, with incline turned into a float (`0.`). This also applies to PC/task CSVs, which now have a consistent format. |
 
